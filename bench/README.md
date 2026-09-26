@@ -107,12 +107,12 @@ different likely limits. The analyzer reads only the v3 artifact directory and t
 benchmark report; it does not load weights or run a second inference path.
 
 ```bash
-./build/bench/ninfer_bench --weights out/qwen3_6_27b.ninfer \
-  -pg '2048,128' --warmup 1 -r 5 -o json \
+./build/bench/ninfer_bench --weights out/qwen3_8_27b_nvfp4.ninfer \
+  -pg '2048,128' --max-ctx 8192 --kv-dtype fp8 --warmup 1 -r 5 -o json \
   --output-file profiles/bench/sol_input.json
 python3 -m tools.bench.speed_of_light \
   --report profiles/bench/sol_input.json \
-  --artifact out/qwen3_6_27b.ninfer \
+  --artifact out/qwen3_8_27b_nvfp4.ninfer \
   --peak-tflops 1676 --hbm-gbps 1792
 ```
 
@@ -127,10 +127,10 @@ pre-change run and pass it to the post-change run with `--baseline`:
 
 ```bash
 python3 -m tools.bench.speed_of_light --report before.json \
-  --artifact out/qwen3_6_27b.ninfer \
+  --artifact out/qwen3_8_27b_nvfp4.ninfer \
   --peak-tflops 1676 --hbm-gbps 1792 --json > profiles/bench/sol_before.json
 python3 -m tools.bench.speed_of_light --report after.json \
-  --artifact out/qwen3_6_27b.ninfer \
+  --artifact out/qwen3_8_27b_nvfp4.ninfer \
   --peak-tflops 1676 --hbm-gbps 1792 --baseline profiles/bench/sol_before.json
 ```
 
