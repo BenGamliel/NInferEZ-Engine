@@ -10,6 +10,12 @@ The frozen request corpus for the separate black-box Serve TTFT tool is document
 [`fixtures/ttft/`](fixtures/ttft/README.md). That client does not call the benchmark executables or
 Engine directly.
 
+Two black-box serve-level A/B rigs compare a control `ninfer-serve` build with this one over
+the OpenAI API: [`agentic_ab/`](agentic_ab/README.md) replays interleaved agent sessions,
+subagent fan-outs, compaction, retries and aborts in a closed loop and reports cache hits, TTFT,
+cold prefill and output rates, with an optional arm on the hybrid prefix cache;
+[`ab/`](ab/README.md) replays a fixed 14-request agentic workload.
+
 ## Build
 
 `CMakeLists.txt` includes explicit registrations from `ops/`, `inference/`, `context_cost/`
