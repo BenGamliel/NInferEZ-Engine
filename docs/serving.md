@@ -499,8 +499,10 @@ nested parameter opener; either makes the call malformed.
 Generated prose can quote tool-call markup before the real call. Unless the first marker's region
 opens with a complete call, each marker is tried in order, and the first complete region that
 consumes the rest of the response becomes the structured turn; quoted markup before it stays
-ordinary content. At most sixteen markers are tried, the first one included, so an output that keeps
-repeating the marker costs a bounded amount of parsing. A region that opens a function but does not parse is recovered: complete calls
+ordinary content. Generated reasoning closes only at a `</think>` followed by format whitespace or
+the end of the turn, so a marker the model quotes while reasoning (followed by punctuation or an
+escaped newline) stays in the reasoning channel. At most sixteen markers are tried, the first one
+included, so an output that keeps repeating the marker costs a bounded amount of parsing. A region that opens a function but does not parse is recovered: complete calls
 before the failure are kept, a call that cannot be read is returned as a call to the reserved
 `malformed_tool_call` tool, whose arguments tell the model what went wrong so that it retries, and
 text after it is dropped.
