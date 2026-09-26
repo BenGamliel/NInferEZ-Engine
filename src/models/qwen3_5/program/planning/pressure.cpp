@@ -137,9 +137,11 @@ explicit_pressure_target(const qwen3_5::detail::PressureDecision& complete) {
     explicit_target.main_kv_changes    = complete.main_kv_changes;
     explicit_target.backend_kv_changes = complete.backend_kv_changes;
     explicit_target.effect.removed     = checked_resource_difference(
-        complete.effect.removed, complete.checkpoint_drop_effect.removed);
+        complete.effect.removed, complete.checkpoint_drop_effect.removed,
+        "explicit pressure target removed");
     explicit_target.effect.added =
-        checked_resource_difference(complete.effect.added, complete.checkpoint_drop_effect.added);
+        checked_resource_difference(complete.effect.added, complete.checkpoint_drop_effect.added,
+                                    "explicit pressure target added");
     explicit_target.transfer_requirements = complete.transfer_requirements;
     explicit_target.shared_owner          = complete.shared_owner;
     explicit_target.id                    = explicit_pressure_identity(explicit_target);
@@ -719,10 +721,11 @@ ProgramImpl::inspect_pressure_option(const SequenceState& sequence,
         option.state_changes      = current->state_changes;
         option.main_kv_changes    = current->main_kv_changes;
         option.backend_kv_changes = current->backend_kv_changes;
-        option.effect.removed     = checked_resource_difference(
-            current->effect.removed, current->checkpoint_drop_effect.removed);
-        option.effect.added          = checked_resource_difference(current->effect.added,
-                                                                   current->checkpoint_drop_effect.added);
+        option.effect.removed = checked_resource_difference(current->effect.removed,
+                                                            current->checkpoint_drop_effect.removed,
+                                                            "pressure option removed");
+        option.effect.added   = checked_resource_difference(
+            current->effect.added, current->checkpoint_drop_effect.added, "pressure option added");
         option.transfer_requirements = current->transfer_requirements;
     }
     const std::size_t initial_actions = option.state_changes.size() +
@@ -773,8 +776,10 @@ ProgramImpl::inspect_pressure_option(const SequenceState& sequence,
             std::find(option.state_changes.begin(), option.state_changes.end(),
                       endpoint_host_drop) != option.state_changes.end();
         const detail::PhysicalDelta extension_effect{
-            .removed = checked_resource_difference(option.effect.removed, initial_effect.removed),
-            .added   = checked_resource_difference(option.effect.added, initial_effect.added),
+            .removed = checked_resource_difference(option.effect.removed, initial_effect.removed,
+                                                   "pressure extension removed"),
+            .added   = checked_resource_difference(option.effect.added, initial_effect.added,
+                                                   "pressure extension added"),
         };
         const detail::PhysicalResources residual = pressure_residual(deficit, extension_effect);
         if ((residual.device.state_slots == 0 && residual.host.state_slots == 0) ||
@@ -1454,7 +1459,8 @@ std::optional<detail::PressureTargetProjection> ProgramImpl::evaluate_pressure_t
             projection.unique_object_delta.removed = checked_resource_sum(
                 projection.unique_object_delta.removed,
                 checked_resource_difference(option.effect.removed,
-                                            option.checkpoint_drop_effect.removed));
+                                            option.checkpoint_drop_effect.removed,
+                                            "pressure projection unique objects"));
             projection.unique_object_delta.added =
                 checked_resource_sum(projection.unique_object_delta.added, option.effect.added);
         }
@@ -2322,7 +2328,8 @@ bool ProgramImpl::compose_pressure_candidate(
                              projection->ownership_transfer_delta.added);
     details.demand.active_entitlement = checked_resource_sum(
         checked_resource_difference(details.demand.active_entitlement,
-                                    projection->active_entitlement_delta.removed),
+                                    projection->active_entitlement_delta.removed,
+                                    "pressure plan active entitlement"),
         projection->active_entitlement_delta.added);
     details.active_optional_resources = checked_resource_sum(
         details.active_optional_resources, projection->source_optional_resources_added);

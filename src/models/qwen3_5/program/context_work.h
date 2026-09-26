@@ -54,8 +54,11 @@ std::optional<StateImageHandle> pressure_state_source(qwen3_5::detail::PressureS
 detail::PhysicalResources checked_resource_sum(detail::PhysicalResources left,
                                                detail::PhysicalResources right);
 
+// `site` names the accounting step in the underflow error, with both operands, so a violated
+// resource invariant can be traced from the console alone.
 detail::PhysicalResources checked_resource_difference(detail::PhysicalResources value,
-                                                      detail::PhysicalResources removed);
+                                                      detail::PhysicalResources removed,
+                                                      const char* site);
 
 detail::PhysicalResources positive_resource_difference(detail::PhysicalResources value,
                                                        detail::PhysicalResources removed) noexcept;

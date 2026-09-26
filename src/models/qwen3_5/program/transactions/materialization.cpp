@@ -610,8 +610,10 @@ void ProgramImpl::prepare_consumed_source(MaterializationTransaction& transactio
     refresh_state_views(source);
 
     const detail::PhysicalResources after   = owner_exclusive_resources(source);
-    const detail::PhysicalResources removed = checked_resource_difference(before, after);
-    (void)checked_resource_difference(details.demand.final_removed, removed);
+    const detail::PhysicalResources removed =
+        checked_resource_difference(before, after, "materialization source truncation");
+    (void)checked_resource_difference(details.demand.final_removed, removed,
+                                      "materialization source truncation against plan");
 }
 
 void ProgramImpl::prepare_materialization(MaterializationTransaction& transaction) {
@@ -2005,8 +2007,10 @@ ProgramImpl::progress_materialization_transaction(runtime::CancellationFlagView 
     }
 
     const auto complete_pressure_delta = [&](MaterializationTransaction::PressureWork& work) {
-        (void)checked_resource_difference(work.option.effect.removed, work.committed_delta.removed);
-        (void)checked_resource_difference(work.option.effect.added, work.committed_delta.added);
+        (void)checked_resource_difference(work.option.effect.removed, work.committed_delta.removed,
+                                          "materialization pressure removed");
+        (void)checked_resource_difference(work.option.effect.added, work.committed_delta.added,
+                                          "materialization pressure added");
         work.committed_delta = work.option.effect;
     };
 

@@ -51,6 +51,10 @@ private:
 // checkpoint, retention, or scheduling policy.
 class HostKVExtentStore {
 public:
+    [[nodiscard]] std::uint32_t descriptor_capacity() const noexcept {
+        return static_cast<std::uint32_t>(extents_.size());
+    }
+
     HostKVExtentStore(HostKVArena& arena, std::uint32_t descriptor_capacity)
         : arena_(&arena), extents_(descriptor_capacity), free_(descriptor_capacity),
           free_count_(descriptor_capacity), memberships_(descriptor_capacity),

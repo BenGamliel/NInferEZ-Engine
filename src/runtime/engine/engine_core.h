@@ -1009,21 +1009,24 @@ private:
             request->terminal_reason.reset();
 
             finish_engine_phase(boundary, EngineHostPhase::Boundary);
-            complete_success(request, reason);
+            // Free the slot and publish the post-release snapshot before waking the caller so
+            // runtime_stats() read after generate() returns reflects the released lane.
             remove_completed_slot(lane);
+            publish_runtime_stats();
+            complete_success(request, reason);
             boundary = begin_host_phase();
             changed  = true;
         }
-        if (changed) { publish_runtime_stats(); }
         return changed;
     }
 
     void cancel_active_requests(const std::array<bool, kMaximumConcurrency>& cancelled_at_boundary,
                                 HostPhaseMeasurement& boundary) {
         if (instance_.program->has_context_transaction()) { return; }
-        bool changed = false;
         for (std::uint32_t lane = 0; lane < max_concurrency_; ++lane) {
-            const auto& request = slots_[lane];
+            // A copy: remove_completed_slot below resets the slot, and complete_success must
+            // still reach the request.
+            const auto request = slots_[lane];
             if (request == nullptr || !cancelled_at_boundary[lane]) { continue; }
             if (request->capture_pending) { continue; }
             if (!request->sequence || !request->lane || request->lane->value != lane) {
@@ -1036,12 +1039,13 @@ private:
             if (scheduler_.prefill_lane() == lane) { scheduler_.clear_prefill_lane(lane); }
             append_output(request, request->output.commit_preview());
             finish_engine_phase(boundary, EngineHostPhase::Boundary);
-            complete_success(request, FinishReason::Cancelled);
+            // Free the slot and publish the post-release snapshot before waking the caller so
+            // runtime_stats() read after generate() returns reflects the released lane.
             remove_completed_slot(lane);
+            publish_runtime_stats();
+            complete_success(request, FinishReason::Cancelled);
             boundary = begin_host_phase();
-            changed  = true;
         }
-        if (changed) { publish_runtime_stats(); }
     }
 
     [[nodiscard]] bool expire_pending_requests() {
@@ -2009,8 +2013,7 @@ private:
         const std::shared_ptr<Request> materializing_request =
             materializing_ ? materializing_->request : nullptr;
         try { materializing_.reset(); } catch (...) {}
-        try { instance_.program->fail_all_cleanup(); } catch (...) {}
-        try { resources_.clear_after_program_cleanup(); } catch (...) {}
+        cleanup_program_locked();
         for (std::uint32_t lane = 0; lane < max_concurrency_; ++lane) {
             if (slots_[lane] != nullptr) {
                 auto slot_request = std::move(slots_[lane]);
@@ -2022,6 +2025,23 @@ private:
             force_complete_error(materializing_request, error);
         }
         try { publish_runtime_stats(); } catch (...) {}
+    }
+
+    // Drops every Program owner and the Engine's catalog of them. Reports when the Program had to
+    // rebuild its context stores because an owner could not be released cleanly.
+    void cleanup_program_locked() noexcept {
+        decltype(instance_.program->fail_all_cleanup()) leaked;
+        try { leaked = instance_.program->fail_all_cleanup(); } catch (...) {}
+        try { resources_.clear_after_program_cleanup(); } catch (...) {}
+        if (leaked) {
+            std::fprintf(stderr,
+                         "[engine] recovery rebuilt the context stores: cleanup left %u main / %u "
+                         "backend Device KV pages, %u Device and %u Host StateImages and %zu Host "
+                         "KV bytes without an owner\n",
+                         leaked->device_main_kv_pages, leaked->device_backend_kv_pages,
+                         leaked->device_state_slots, leaked->host_state_slots,
+                         leaked->host_kv_bytes);
+        }
     }
 
     // The worker holds execution_mutex_ across the failing operation and this cleanup, so no
@@ -2037,8 +2057,7 @@ private:
         const std::shared_ptr<Request> materializing_request =
             materializing_ ? materializing_->request : nullptr;
         try { materializing_.reset(); } catch (...) {}
-        try { instance_.program->fail_all_cleanup(); } catch (...) {}
-        try { resources_.clear_after_program_cleanup(); } catch (...) {}
+        cleanup_program_locked();
         for (std::uint32_t lane = 0; lane < max_concurrency_; ++lane) {
             if (slots_[lane] != nullptr) {
                 auto slot_request = std::move(slots_[lane]);

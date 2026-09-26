@@ -102,6 +102,8 @@ public:
 
     [[nodiscard]] std::optional<HostStateSlotHandle> allocate() noexcept;
     [[nodiscard]] bool release(HostStateSlotHandle handle) noexcept;
+    // Frees every occupied slot; outstanding handles become stale.
+    void release_all() noexcept;
 
     [[nodiscard]] HostStateImageView writable_view(HostStateSlotHandle handle);
     [[nodiscard]] HostStateImageConstView view(HostStateSlotHandle handle) const;

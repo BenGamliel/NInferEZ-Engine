@@ -939,7 +939,11 @@ public:
     [[nodiscard]] AbortResult abort(SequenceHandle sequence) noexcept;
     [[nodiscard]] ReleaseResult release_continuation(ContinuationHandle&& continuation) noexcept;
     [[nodiscard]] ReleaseResult release_shared_prefix(SharedPrefixHandle&& shared) noexcept;
-    void fail_all_cleanup() noexcept;
+    // Discards every active and retained owner. When a release fails on state left inconsistent
+    // by a thrown invariant, the context stores are rebuilt so no orphaned KV page, StateImage or
+    // Host KV extent outlives its owner; the usage that survived the ordinary cleanup is returned
+    // then, for diagnostics.
+    [[nodiscard]] std::optional<PhysicalUsageSnapshot> fail_all_cleanup() noexcept;
 
     [[nodiscard]] bool isolated_request_feasible(const RequestBasePlan& base) const noexcept;
     [[nodiscard]] runtime::ProgramResourceRevision resource_revision() const noexcept;

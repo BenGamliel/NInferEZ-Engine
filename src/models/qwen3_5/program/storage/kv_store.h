@@ -1424,8 +1424,11 @@ public:
 
     void resize_entitlement(KVAddressSpaceHandle handle, std::uint32_t entitlement) {
         Address& address = require_active(handle);
-        if (entitlement < address.page_count || entitlement > page_capacity_) {
+        if (entitlement < address.page_count) {
             throw std::invalid_argument("KV entitlement is smaller than mapped pages");
+        }
+        if (entitlement > page_capacity_) {
+            throw std::invalid_argument("KV entitlement exceeds the address page capacity");
         }
         pages_->physical_pool().resize_reservation(address.reservation,
                                                    entitlement - address.page_count);

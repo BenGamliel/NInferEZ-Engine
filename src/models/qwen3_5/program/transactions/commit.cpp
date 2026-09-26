@@ -768,7 +768,7 @@ ReleaseResult ProgramImpl::release_shared_prefix(SharedPrefixHandle&& handle) no
     return out;
 }
 
-void ProgramImpl::fail_all_cleanup() noexcept {
+std::optional<qwen3_5::PhysicalUsageSnapshot> ProgramImpl::fail_all_cleanup() noexcept {
     pending_transaction_.reset();
     if (auto* transaction = std::get_if<ActiveCaptureTransaction>(&context_transaction_)) {
         if (transaction->transfer_submitted) { synchronize_transfer_streams(); }
@@ -797,6 +797,99 @@ void ProgramImpl::fail_all_cleanup() noexcept {
             ContractAccess::make_shared_prefix(this, index, shared_prefix_slots[index].generation);
         (void)release_shared_prefix(std::move(handle));
     }
+
+    // Every owner is gone now, so anything a store still holds is unreachable: a best-effort
+    // release declined an object whose state a thrown invariant left inconsistent. Left in place,
+    // it would keep an idle Engine from admitting the next request.
+    if (context_stores_idle()) { return std::nullopt; }
+    const qwen3_5::PhysicalUsageSnapshot leaked = physical_usage();
+    (void)rebuild_context_stores();
+    return leaked;
+}
+
+bool ProgramImpl::context_stores_idle() const noexcept {
+    const auto empty = [](const auto& store) { return store == nullptr || store->occupied() == 0; };
+    return physical_occupancy() == detail::PhysicalResources{} && empty(text_kv_pages) &&
+           empty(text_kv_addresses) && empty(backend_kv_pages) && empty(backend_kv_addresses) &&
+           empty(state_store);
+}
+
+// Replaces the context stores with empty ones of the same capacity. Destroying the old stores
+// returns their Device page leases and reservations, execution rows and Host KV allocations to the
+// pools through RAII; the Host StateImage pool, whose slots the store tracks by handle, is reset
+// explicitly. The page pools, execution tables, Vision loans and the Disk tier live outside the
+// stores and are untouched. Only valid once no owner, lane or context transaction remains.
+bool ProgramImpl::rebuild_context_stores() noexcept {
+    std::unique_ptr<LogicalKVPageStore> text_pages;
+    std::unique_ptr<KVAddressSpaceStore> text_addresses;
+    std::unique_ptr<LogicalKVPageStore> backend_pages;
+    std::unique_ptr<KVAddressSpaceStore> backend_addresses;
+    std::unique_ptr<HostKVExtentStore> extents;
+    std::unique_ptr<StateImageStore> states;
+    try {
+        text_pages     = std::make_unique<LogicalKVPageStore>(decoder->text_kv.page_pool(),
+                                                              text_kv_pages->capacity());
+        text_addresses = std::make_unique<KVAddressSpaceStore>(
+            *text_pages, decoder->text_kv.execution_tables(), text_kv_addresses->capacity(),
+            decoder->text_kv.execution_tables().logical_page_capacity());
+        if (qwen3_5::PagedKVCache* backend = backend_kv_cache()) {
+            backend_pages     = std::make_unique<LogicalKVPageStore>(backend->page_pool(),
+                                                                     backend_kv_pages->capacity());
+            backend_addresses = std::make_unique<KVAddressSpaceStore>(
+                *backend_pages, backend->execution_tables(), backend_kv_addresses->capacity(),
+                backend->execution_tables().logical_page_capacity());
+        }
+        if (host_kv_extents) {
+            extents = std::make_unique<HostKVExtentStore>(*host_kv_arena,
+                                                          host_kv_extents->descriptor_capacity());
+        }
+        states = std::make_unique<StateImageStore>(*state_images, host_state_images.get(),
+                                                   state_store->capacity());
+        // A Disk tier write may still read a Host replica of an old store.
+        if (disk_kv) { disk_kv->wait_idle(); }
+    } catch (...) { return false; }
+
+    // Copies still in flight may target pages about to return to the pools.
+    for (std::size_t rank = 0; rank < transfer_streams.size(); ++rank) {
+        (void)cudaStreamSynchronize(compute_streams[rank]);
+        (void)cudaStreamSynchronize(transfer_streams[rank]);
+    }
+
+    // Handles into the old stores must not alias objects of the new ones.
+    for (SequenceState& sequence : continuation_states) {
+        sequence.kv.reset();
+        sequence.state = {};
+        sequence.rewrite_state.reset();
+        sequence.reserved_state.reset();
+        sequence.tail_hidden               = {};
+        sequence.rewrite_checkpoint_hidden = {};
+        sequence.long_anchors.clear();
+        sequence.shared_prefix_references.clear();
+    }
+    for (std::uint32_t index = 0; index < continuation_capacity; ++index) {
+        if (continuation_slots[index].role != ContinuationSlotRole::Free) {
+            retire_continuation_slot(index);
+        }
+    }
+    for (std::uint32_t index = 0; index < shared_prefix_capacity; ++index) {
+        shared_prefix_states[index] = SharedPrefixState{};
+        SharedPrefixSlot& slot      = shared_prefix_slots[index];
+        if (slot.role != SharedPrefixSlotRole::Free) {
+            slot.role = SharedPrefixSlotRole::Free;
+            if (++slot.generation == 0) { ++slot.generation; }
+        }
+    }
+
+    // Addresses hold reservations against the page pools, so they go before the pages.
+    backend_kv_addresses = std::move(backend_addresses);
+    text_kv_addresses    = std::move(text_addresses);
+    host_kv_extents      = std::move(extents);
+    backend_kv_pages     = std::move(backend_pages);
+    text_kv_pages        = std::move(text_pages);
+    state_store          = std::move(states);
+    if (host_state_images) { host_state_images->release_all(); }
+    advance_resource_revision();
+    return true;
 }
 
 

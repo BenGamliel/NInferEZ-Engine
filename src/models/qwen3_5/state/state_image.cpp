@@ -272,6 +272,17 @@ bool HostStatePool::release(HostStateSlotHandle handle) noexcept {
     return true;
 }
 
+void HostStatePool::release_all() noexcept {
+    for (std::uint32_t index = 0; index < slots_.size(); ++index) {
+        Slot& slot = slots_[index];
+        if (!slot.occupied) { continue; }
+        slot.occupied = false;
+        if (++slot.generation == 0) { ++slot.generation; }
+        free_slots_[free_count_++] = index;
+    }
+    occupied_ = 0;
+}
+
 HostStateImageView HostStatePool::writable_view(HostStateSlotHandle handle) {
     if (!valid(handle)) { throw std::invalid_argument("HostStatePool handle is stale"); }
     return {.data = slot_data(handle.index), .layout = &layout_};

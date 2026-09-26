@@ -466,7 +466,9 @@ ReleaseResult Program::release_shared_prefix(SharedPrefixHandle&& shared) noexce
     return impl_->release_shared_prefix(std::move(shared));
 }
 
-void Program::fail_all_cleanup() noexcept { impl_->fail_all_cleanup(); }
+std::optional<PhysicalUsageSnapshot> Program::fail_all_cleanup() noexcept {
+    return impl_->fail_all_cleanup();
+}
 
 bool Program::isolated_request_feasible(const RequestBasePlan& base) const noexcept {
     return impl_->isolated_request_feasible(base);

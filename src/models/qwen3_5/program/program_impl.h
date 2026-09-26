@@ -567,7 +567,9 @@ public:
     [[nodiscard]] AbortResult abort(SequenceHandle sequence) noexcept;
     [[nodiscard]] ReleaseResult release_continuation(ContinuationHandle&& continuation) noexcept;
     [[nodiscard]] ReleaseResult release_shared_prefix(SharedPrefixHandle&& shared) noexcept;
-    void fail_all_cleanup() noexcept;
+    [[nodiscard]] std::optional<qwen3_5::PhysicalUsageSnapshot> fail_all_cleanup() noexcept;
+    [[nodiscard]] bool context_stores_idle() const noexcept;
+    [[nodiscard]] bool rebuild_context_stores() noexcept;
     [[nodiscard]] detail::PhysicalResources admission_capacity() const noexcept;
     [[nodiscard]] bool isolated_request_feasible(const RequestBasePlan& base) const noexcept;
 
