@@ -568,6 +568,10 @@ public:
             std::uint64_t replacement_id          = 0;
             std::uint64_t replacement_revision    = 0;
             std::uint32_t stable_ordinal          = 0;
+            // Plans the publication into a catalogued automatic entry's slot as if it were
+            // vacant. The entry is released only if this scenario is the one selected, after
+            // which the capture is planned again against the freed slot.
+            bool reclaims_slot = false;
         };
 
         struct SelectedCapture {
@@ -587,13 +591,35 @@ public:
             !candidate.publishes_shared && private_baseline.publishes_private &&
             !private_baseline.physically_feasible && !active_[lane.value].admitted_under_pressure;
         if (candidate.publishes_shared || private_only_pressure) {
-            const bool pressure_evidence =
-                private_only_pressure ||
+            // Declared credit means the client (ExplicitBoundary) or a system default
+            // (RequestedAutomatic) gave this candidate an explicit retention standing. Automatic
+            // (EngineObserved) candidates carry no such contract and are therefore reclaimable.
+            const bool declared_credit =
                 has_shared_candidate_evidence(candidate.shared_evidence,
                                               SharedCandidateEvidence::ExplicitBoundary) ||
                 has_shared_candidate_evidence(candidate.shared_evidence,
-                                              SharedCandidateEvidence::RequestedAutomatic) ||
-                matching_reuse_domains(candidate.shortlist_key) >= 2U;
+                                              SharedCandidateEvidence::RequestedAutomatic);
+            const bool pressure_evidence = private_only_pressure || declared_credit ||
+                                           matching_reuse_domains(candidate.shortlist_key) >= 2U;
+            // Automatic-evidence candidates can only claim a vacant slot. When the catalog is
+            // saturated, the least recently used eligible automatic entry is offered as a
+            // reclaimable slot so a full catalog cannot freeze them out permanently: without it,
+            // once every slot holds a resident entry, every later ordinary client loses
+            // shared-prefix reuse until an engine restart (issue #251). Gate on the *absence of
+            // declared credit*, not on pressure_evidence: a repeated automatic candidate's own
+            // committed demand record already pushes its window-only matching_reuse_domains count
+            // to >= 2 by capture time (the very gate that made it a shared-capture candidate), so a
+            // pressure_evidence gate would make this reclaim unreachable for exactly the traffic
+            // it exists to serve. The entry is not released here: only once a scenario that
+            // publishes into its slot has planned, so a capture that cannot proceed costs nothing.
+            std::optional<std::uint32_t> reclaim_slot;
+            if (candidate.publishes_shared && !declared_credit &&
+                std::none_of(shared_catalog_.begin(), shared_catalog_.end(),
+                             [](const SharedCatalogEntry& entry) {
+                                 return entry.state == SharedCatalogState::Vacant;
+                             })) {
+                reclaim_slot = least_recent_reclaimable_shared_slot();
+            }
 
             // A private-only candidate with no committed demand and no shared credit adds no public
             // value, while every pressure target can only lower a resident's, so its search would
@@ -626,6 +652,14 @@ public:
                 });
                 vacant_publication = true;
                 break;
+            }
+            if (reclaim_slot) {
+                scenarios.push_back(CaptureScenario{
+                    .assessment       = candidate,
+                    .publication_slot = *reclaim_slot,
+                    .stable_ordinal   = 0,
+                    .reclaims_slot    = true,
+                });
             }
             // Replacing a resident owner while a slot stands empty trades a frontier other requests
             // can still match for one this request happens to value more. The portfolio fold prices
@@ -783,7 +817,8 @@ public:
                         const SharedCatalogEntry& entry = shared_catalog_[slot];
                         if (entry.state != SharedCatalogState::Catalogued || !entry.handle ||
                             entry.transaction_pins != 0 || shared_active_edge_count(slot) != 0 ||
-                            entry.id == scenario.replacement_id) {
+                            entry.id == scenario.replacement_id ||
+                            (scenario.reclaims_slot && slot == scenario.publication_slot)) {
                             continue;
                         }
                         shared_owners.push_back(&*entry.handle);
@@ -831,6 +866,20 @@ public:
                     });
                 }
             }
+        }
+
+        if (selected && selected->scenario.reclaims_slot) {
+            // The reclaim scenario won: release the entry now and plan again, so the capture is
+            // sealed against the freed slot and the resources it released. The second pass finds
+            // a vacant slot and never reclaims again.
+            const std::uint32_t slot = selected->scenario.publication_slot;
+            selected.reset();
+            if (!reclaim_automatic_shared_prefix(program, slot)) {
+                program.skip_capture(std::move(offer));
+                return ActiveCaptureReserveResult::Skipped;
+            }
+            return reserve_active_capture(program, lane, std::move(offer),
+                                          blocked_runnable_requests, cancellation);
         }
 
         if (!selected) {
@@ -1297,6 +1346,9 @@ private:
         std::uint32_t transaction_pins    = 0;
         bool explicit_credit              = false;
         std::uint64_t credit_expiry_epoch = 0;
+        // Retention epoch at which this prefix was published, so a fresh entry that nothing has
+        // hit yet still ranks as recent against one hit long ago.
+        std::uint64_t last_touch_epoch = 0;
     };
 
     enum class SessionIndexState : std::uint8_t {
@@ -1741,7 +1793,66 @@ private:
         entry.transaction_pins    = 0;
         entry.explicit_credit     = false;
         entry.credit_expiry_epoch = 0;
+        entry.last_touch_epoch    = 0;
         advance_revision(entry.revision);
+    }
+
+    // LRU eligibility for automatic-evidence reclamation: catalogued, holding no explicit client
+    // credit (client-declared credit ages out through credit_expiry_epoch instead), unpinned by
+    // an open transaction, and with no active reuse edges.
+    [[nodiscard]] bool shared_automatic_reclaimable(const SharedCatalogEntry& entry,
+                                                    std::uint32_t slot) const {
+        return entry.state == SharedCatalogState::Catalogued && entry.handle &&
+               entry.transaction_pins == 0 && shared_active_edge_count(slot) == 0 &&
+               !entry.explicit_credit;
+    }
+
+    [[nodiscard]] std::uint32_t shared_reclaimable_slot_count() const {
+        std::uint32_t count = 0;
+        for (std::uint32_t slot = 0; slot < shared_catalog_count_; ++slot) {
+            if (shared_automatic_reclaimable(shared_catalog_[slot], slot)) { ++count; }
+        }
+        return count;
+    }
+
+    // The eligible automatic shared catalog entry least recently used: oldest latest hit or
+    // publication (`shared_recency_epoch`), ties broken by publication order. Automatic-evidence
+    // candidates (ordinary clients) have no pressure standing -- the portfolio model prices
+    // uncredited owners at zero, so pressure planning can never approve their replacement -- and
+    // without reclamation a saturated shared catalog freezes them out for the rest of the
+    // engine's life (issue #251). Choosing by use rather than by publication order keeps a
+    // prefix every new conversation still hits from being dropped for a newcomer.
+    [[nodiscard]] std::optional<std::uint32_t> least_recent_reclaimable_shared_slot() const {
+        std::optional<std::uint32_t> victim;
+        std::tuple<std::uint64_t, std::uint64_t> oldest{std::numeric_limits<std::uint64_t>::max(),
+                                                        std::numeric_limits<std::uint64_t>::max()};
+        for (std::uint32_t slot = 0; slot < shared_catalog_count_; ++slot) {
+            const SharedCatalogEntry& entry = shared_catalog_[slot];
+            if (!shared_automatic_reclaimable(entry, slot)) { continue; }
+            const std::tuple<std::uint64_t, std::uint64_t> key{shared_recency_epoch(entry),
+                                                               entry.id};
+            if (key < oldest) {
+                victim = slot;
+                oldest = key;
+            }
+        }
+        return victim;
+    }
+
+    // Releases the automatic shared catalog entry in `slot` through the Program. Returns true
+    // when the slot became vacant.
+    bool reclaim_automatic_shared_prefix(Program& program, std::uint32_t slot) {
+        if (slot >= shared_catalog_count_ ||
+            !shared_automatic_reclaimable(shared_catalog_[slot], slot)) {
+            return false;
+        }
+        SharedCatalogEntry& entry = shared_catalog_[slot];
+        const auto released       = program.release_shared_prefix(std::move(*entry.handle));
+        if (released.status != ConsumeStatus::Consumed) { return false; }
+        clear_shared_entry(entry);
+        rebuild_prefix_index();
+        saturating_increment(context_stats_.pressure_shared_owners_evicted);
+        return true;
     }
 
     void rebuild_prefix_index() {
@@ -1840,6 +1951,11 @@ private:
         return epoch;
     }
 
+    [[nodiscard]] static std::uint64_t
+    shared_recency_epoch(const SharedCatalogEntry& entry) noexcept {
+        return std::max(entry.observation.last_hit_epoch, entry.last_touch_epoch);
+    }
+
     template <class SplitCostFn>
     [[nodiscard]] std::vector<std::uint32_t> select_materialization_shared_captures(
         Program& program, const RequestBasePlan& base, const Candidate& selected_candidate,
@@ -1860,6 +1976,12 @@ private:
             std::count_if(shared_catalog_.begin(), shared_catalog_.end(), [](const auto& entry) {
                 return entry.state == SharedCatalogState::Vacant;
             }));
+        // Automatic-evidence candidates can also reclaim the oldest eligible automatic entry at
+        // capture time; count that slack so selection stays consistent with what the capture
+        // transaction can actually fulfil instead of silently dropping every automatic candidate
+        // once the catalog saturates (issue #251).
+        const std::uint32_t shared_publication_slack =
+            vacant_shared_slots + shared_reclaimable_slot_count();
         for (const auto& opportunity : base.context_cache().opportunities) {
             if (opportunity.kind != PromptCacheMarkerKind::SharedStablePrefix ||
                 opportunity.frontier < selected_summary.reusable_prompt_tokens) {
@@ -1906,7 +2028,7 @@ private:
             // two distinct reuse domains asking for the same key, which is exactly the case
             // where a conversational endpoint has become a common prefix.
             const bool surplus_candidate =
-                vacant_shared_slots != 0 &&
+                shared_publication_slack != 0 &&
                 has_shared_candidate_evidence(opportunity.evidence,
                                               SharedCandidateEvidence::EngineStructural);
             if (!declared && !repeated && !surplus_candidate) { continue; }
@@ -2020,7 +2142,7 @@ private:
                     .target_recovery_ns   = 0,
                 });
             }
-            if (surplus_only_count > vacant_shared_slots) { continue; }
+            if (surplus_only_count > shared_publication_slack) { continue; }
             std::sort(frontiers.begin(), frontiers.end());
             const ContextPortfolioValueResult value = projected_value.fold(owners, checkpoints);
             const std::uint64_t schedule_cost       = split_cost(frontiers);
@@ -3379,6 +3501,7 @@ private:
             publication.handle.emplace(std::move(result.shared->handle));
             publication.observation =
                 RetentionObservation{.retention_class = RetentionClass::SharedStable};
+            publication.last_touch_epoch = ++retention_epoch_;
             publication.transaction_pins = 0;
             publication.explicit_credit =
                 has_shared_candidate_evidence(record->shared_evidence,

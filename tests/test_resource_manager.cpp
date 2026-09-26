@@ -305,6 +305,8 @@ struct FakeContinuationHandle {
 struct FakeSharedPrefixHandle {
     std::uint32_t id          = 0;
     std::uint32_t content_key = 0;
+    // Published checkpoint frontier; zero prices the owner's pressure impact at finish_frontier.
+    std::uint32_t frontier = 0;
 
     FakeSharedPrefixHandle()                                             = default;
     FakeSharedPrefixHandle(FakeSharedPrefixHandle&&) noexcept            = default;
@@ -912,6 +914,7 @@ public:
                     FakeSharedPrefixHandle handle;
                     handle.id          = next_shared_id_++;
                     handle.content_key = capture_assessment.shortlist_key.digest;
+                    handle.frontier    = capture_assessment.shortlist_key.frontier;
                     result.shared      = FakeSharedPrefixPublication{
                              .handle = std::move(handle),
                              .summary =
@@ -1164,6 +1167,13 @@ public:
         return FakeReleaseResult{.status = ConsumeStatus::Consumed};
     }
 
+    [[nodiscard]] FakeReleaseResult
+    release_shared_prefix(FakeSharedPrefixHandle&& shared) noexcept {
+        released_shared_prefix_keys.push_back(shared.content_key);
+        advance_revision();
+        return FakeReleaseResult{.status = ConsumeStatus::Consumed};
+    }
+
     [[nodiscard]] ProgramResourceRevision resource_revision() const noexcept { return revision_; }
 
     [[nodiscard]] FakePhysicalUsage physical_usage() const noexcept { return usage; }
@@ -1224,6 +1234,7 @@ public:
     std::vector<std::uint64_t> started_action_ids;
     std::vector<std::uint32_t> selected_shared_capture_frontiers;
     std::vector<std::uint32_t> released_continuations;
+    std::vector<std::uint32_t> released_shared_prefix_keys;
 
 private:
     void advance_revision() noexcept {
@@ -1605,10 +1616,14 @@ FakeAssessedPressureTarget FakePressurePlanningSession::assess(FakePressureTarge
         };
         const bool endpoint_survives =
             !decision.evicts_continuation && decision.dropped_checkpoints == 0;
+        const std::uint32_t owner_frontier =
+            owners_[index].shared && owners_[index].shared_handle->frontier != 0
+                ? owners_[index].shared_handle->frontier
+                : program_->finish_frontier;
         append_checkpoint_outcome(CheckpointRef{.kind     = owners_[index].shared
                                                                 ? CheckpointKind::SharedStablePrefix
                                                                 : CheckpointKind::SessionEndpoint,
-                                                .frontier = program_->finish_frontier,
+                                                .frontier = owner_frontier,
                                                 .ordinal  = 0},
                                   endpoint_survives);
         if (!owners_[index].shared && program_->finish_with_rewrite) {
@@ -3935,6 +3950,161 @@ void test_publication_only_pressure_constructs_adoptable_target() {
             "publication-only closure did not release exactly one private slot");
 }
 
+// Drives one full request lifecycle that publishes a shared prefix for `digest` at frontier 64
+// and finishes it, leaving the shared prefix catalogued. No private continuation is published
+// (publish_continuation cleared) so reuse can only come from the shared catalog.
+void publish_shared_prefix(FakeManager& manager, FakeProgram& program, std::uint32_t digest,
+                           std::uint64_t publication_order, std::uint32_t offer_id,
+                           ninfer::SharedCandidateEvidence evidence) {
+    FakeRequestBasePlan base        = make_base(digest);
+    base.value.publish_continuation = false;
+    base.cache.opportunities.push_back(FakeContextCache::Opportunity{
+        .kind     = ninfer::PromptCacheMarkerKind::SharedStablePrefix,
+        .evidence = evidence,
+        .frontier = 64,
+    });
+    const ActiveRequest active = start_active(manager, program, digest, base, publication_order);
+    program.capture_assessment = FakeCaptureAssessment{
+        .shortlist_key          = FakeShortlistKey{.digest = digest, .frontier = 64},
+        .shared_evidence        = evidence,
+        .protected_rebuild_work = PrefillWork{.tokens = 64},
+        .publishes_shared       = true,
+        .physically_feasible    = true,
+    };
+    const auto reserved = manager.reserve_active_capture(program, active.lane,
+                                                         FakeCaptureOffer{.id = offer_id}, 0, {});
+    require(reserved == FakeManager::ActiveCaptureReserveResult::Reserved,
+            "shared capture was not reserved");
+    auto progress      = manager.progress_context_transaction(program, {});
+    const auto outcome = std::get<FakeManager::ActiveCaptureOutcome>(std::move(progress));
+    require(outcome.status == ContextTransactionStatus::Published,
+            "shared capture was not published");
+    (void)finish_active(manager, program, active);
+}
+
+void require_shared_reuse(FakeManager& manager, FakeProgram& program, std::uint32_t digest,
+                          std::uint64_t publication_order, bool expected, const char* message) {
+    auto inspection =
+        manager.inspect(program, FakePreparedPrompt{digest}, make_base(digest), publication_order);
+    require(inspection.choice.has_value(), "reuse inspection produced no admission choice");
+    const bool reused = inspection.choice->summary().prefix_reuse_path ==
+                            ninfer::PrefixReusePath::SharedStablePrefix &&
+                        inspection.choice->summary().reusable_prompt_tokens == 64;
+    require(reused == expected, message);
+}
+
+void test_automatic_shared_capture_reclaims_oldest_catalog_entry() {
+    FakeManager manager = make_manager(1, 4, 2);
+    FakeProgram program;
+
+    publish_shared_prefix(manager, program, 71, 1, 1,
+                          ninfer::SharedCandidateEvidence::DefaultAutomatic);
+    publish_shared_prefix(manager, program, 72, 2, 2,
+                          ninfer::SharedCandidateEvidence::DefaultAutomatic);
+
+    // The catalog (2 slots) is now full of automatic-evidence prefixes. A third distinct
+    // conversation must reclaim the oldest publication instead of losing its shared prefix
+    // forever; before the fix its capture was silently dropped and the catalog stayed frozen.
+    publish_shared_prefix(manager, program, 73, 3, 3,
+                          ninfer::SharedCandidateEvidence::DefaultAutomatic);
+    require(program.released_shared_prefix_keys == std::vector<std::uint32_t>{71},
+            "saturated catalog did not reclaim the oldest automatic shared prefix");
+    require_shared_reuse(manager, program, 73, 4, true,
+                         "reclaimed conversation has no shared prefix reuse");
+    require_shared_reuse(manager, program, 71, 5, false,
+                         "reclaimed shared prefix was still offered for reuse");
+
+    // The catalog must keep rotating for every new conversation, not freeze again after one
+    // reclaim.
+    publish_shared_prefix(manager, program, 74, 6, 4,
+                          ninfer::SharedCandidateEvidence::DefaultAutomatic);
+    require(program.released_shared_prefix_keys == std::vector<std::uint32_t>{71, 72},
+            "second saturated conversation did not reclaim the next-oldest prefix");
+    require_shared_reuse(manager, program, 72, 7, false,
+                         "second reclaimed prefix was still offered for reuse");
+}
+
+void test_explicit_credit_shared_entry_survives_automatic_reclaim() {
+    FakeManager manager = make_manager(1, 4, 2);
+    FakeProgram program;
+
+    publish_shared_prefix(manager, program, 71, 1, 1,
+                          ninfer::SharedCandidateEvidence::ExplicitBoundary);
+    publish_shared_prefix(manager, program, 72, 2, 2,
+                          ninfer::SharedCandidateEvidence::DefaultAutomatic);
+
+    // The explicit-credit entry (71) holds client-declared intent and must not be reclaimed by
+    // ordinary automatic traffic; the automatic entry (72) is the LRU victim instead.
+    publish_shared_prefix(manager, program, 73, 3, 3,
+                          ninfer::SharedCandidateEvidence::DefaultAutomatic);
+    require(program.released_shared_prefix_keys == std::vector<std::uint32_t>{72},
+            "automatic reclaim evicted an explicit-credit shared prefix");
+    require_shared_reuse(manager, program, 71, 4, true,
+                         "explicit-credit shared prefix lost reuse after reclaim");
+}
+
+void test_automatic_reclaim_picks_the_least_recently_used_entry() {
+    FakeManager manager = make_manager(1, 4, 2);
+    FakeProgram program;
+
+    publish_shared_prefix(manager, program, 71, 1, 1,
+                          ninfer::SharedCandidateEvidence::DefaultAutomatic);
+    publish_shared_prefix(manager, program, 72, 2, 2,
+                          ninfer::SharedCandidateEvidence::DefaultAutomatic);
+    // A later conversation reuses 71, so 72 is now the least recently used entry even though
+    // 71 was published first.
+    const ActiveRequest reuse = start_active(manager, program, 71, make_base(71), 3);
+    (void)finish_active(manager, program, reuse);
+
+    publish_shared_prefix(manager, program, 73, 4, 3,
+                          ninfer::SharedCandidateEvidence::DefaultAutomatic);
+    require(program.released_shared_prefix_keys == std::vector<std::uint32_t>{72},
+            "automatic reclaim chose by publication order instead of by use");
+}
+
+void test_automatic_reclaim_waits_for_a_planned_capture() {
+    FakeManager manager = make_manager(1, 4, 2);
+    FakeProgram program;
+
+    publish_shared_prefix(manager, program, 71, 1, 1,
+                          ninfer::SharedCandidateEvidence::DefaultAutomatic);
+    publish_shared_prefix(manager, program, 72, 2, 2,
+                          ninfer::SharedCandidateEvidence::DefaultAutomatic);
+
+    // A third conversation's capture cannot fit, so no scenario plans. The saturated catalog
+    // must not give up an entry for a publication that never happens.
+    FakeRequestBasePlan base        = make_base(73);
+    base.value.publish_continuation = false;
+    base.cache.opportunities.push_back(FakeContextCache::Opportunity{
+        .kind     = ninfer::PromptCacheMarkerKind::SharedStablePrefix,
+        .evidence = ninfer::SharedCandidateEvidence::DefaultAutomatic,
+        .frontier = 64,
+    });
+    const ActiveRequest active = start_active(manager, program, 73, base, 3);
+    program.capture_assessment = FakeCaptureAssessment{
+        .shortlist_key          = FakeShortlistKey{.digest = 73, .frontier = 64},
+        .shared_evidence        = ninfer::SharedCandidateEvidence::DefaultAutomatic,
+        .protected_rebuild_work = PrefillWork{.tokens = 64},
+        .publishes_shared       = true,
+        .physically_feasible    = false,
+    };
+    program.required_pressure_actions = 1; // the capture only fits with pressure it cannot get
+    const auto reserved =
+        manager.reserve_active_capture(program, active.lane, FakeCaptureOffer{.id = 3}, 0, {});
+    program.required_pressure_actions = 0;
+    if (reserved == FakeManager::ActiveCaptureReserveResult::Reserved) {
+        // Only the private baseline can proceed; the shared publication did not plan.
+        auto progress      = manager.progress_context_transaction(program, {});
+        const auto outcome = std::get<FakeManager::ActiveCaptureOutcome>(std::move(progress));
+        require(outcome.status == ContextTransactionStatus::Published,
+                "private baseline capture was not published");
+    }
+    require(program.released_shared_prefix_keys.empty(),
+            "automatic reclaim released a prefix for a capture that did not plan");
+    (void)finish_active(manager, program, active);
+    require_shared_reuse(manager, program, 71, 4, true,
+                         "shared prefix was lost to a capture that never published");
+}
 
 } // namespace
 
@@ -3998,6 +4168,10 @@ int main() {
              test_repeated_private_reuse_selects_zero_prefill_shared_promotion);
     run_test("shared prefix after an exact repeat",
              test_shared_prefix_serves_a_new_question_after_an_exact_repeat);
+    run_test("automatic shared capture LRU reclaim",
+             test_automatic_shared_capture_reclaims_oldest_catalog_entry);
+    run_test("explicit credit survives automatic reclaim",
+             test_explicit_credit_shared_entry_survives_automatic_reclaim);
     run_test("shared fanout owner edges",
              test_shared_fanout_keeps_owner_edges_live_across_summary_refresh);
     run_test("shared capture multi-owner pressure",
@@ -4037,6 +4211,10 @@ int main() {
     run_test("backfill proof and stats", test_backfill_proof_and_stats_follow_program_revision);
     run_test("shortlist exact verification",
              test_shortlist_collision_requires_program_exact_verification);
+    run_test("automatic reclaim picks the least recently used entry",
+             test_automatic_reclaim_picks_the_least_recently_used_entry);
+    run_test("automatic reclaim waits for a planned capture",
+             test_automatic_reclaim_waits_for_a_planned_capture);
     if (failures != 0) { return 1; }
     std::cout << "ok\n";
     return 0;
