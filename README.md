@@ -12,7 +12,8 @@ contributors, open pull requests to [Neroued/ninfer](https://github.com/Neroued/
 [IMGillusion](https://github.com/IMGillusion/ninfer-disk-kv),
 [Mirko Covizzi](https://github.com/MirkoCovizzi/ninfer-rtx5090-mobile),
 Ian Ranson ([Wallawalla47](https://github.com/Wallawalla47/ninfer-custom)),
-[tmark00](https://github.com/tmark00/ninfer) and Gideon Zenz. Each change keeps its
+[tmark00](https://github.com/tmark00/ninfer) and David Oelfke
+([gzenz/ninfer](https://github.com/gzenz/ninfer)). Each change keeps its
 author; the [maintainer map](docs/maintainer/consolidated-line.md) lists them with the files they
 touch.
 
@@ -248,7 +249,7 @@ From other forks:
   `120a` build: on an RTX 5090 (native build, `-DNINFER_SM120_NATIVE=ON`) the 20.6 GB text
   artifact prefilled 27,663 tok/s at 4K and decoded 397 tok/s. Its prefill quantizes activations
   to four bits for W4A4, which only Blackwell has, so sm_8x builds refuse the banks.
-- **Engine and serving fixes**: out-of-memory recovery of the worker (Gideon Zenz's, ported by
+- **Engine and serving fixes**: out-of-memory recovery of the worker (David Oelfke's, ported by
   Ian Ranson), `--kv-headroom-mib`, `--cuda-graph-allowance-mib`, `--thinking-budget-message` (Ian
   Ranson); the WebUI's MCP traffic relayed behind `--webui-mcp-proxy`, E8 root codes decoded from
   tables and an SM-count RMSNorm cutoff ([tmark00](https://github.com/tmark00/ninfer));
