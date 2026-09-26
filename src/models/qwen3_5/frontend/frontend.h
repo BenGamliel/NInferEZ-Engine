@@ -38,6 +38,14 @@ struct FrontendOptions {
     // cross-request archive.
     bool ngram_sources_enabled = false;
     bool ngram_archive_enabled = false;
+    // Engine-automatic long anchors: when nonzero, preparation synthesizes PrivateLongAnchor
+    // opportunities at up to this many message boundaries, walking back from the prompt end on a
+    // geometrically widening grid, so a later history rewrite diverging there resumes from the
+    // retained anchor instead of root.
+    std::uint32_t automatic_long_anchors = 0;
+    // Minimum token gap between consecutive automatic anchors (and between the prompt end and the
+    // first one), doubling per anchor; 0 anchors every one of the last boundaries.
+    std::uint32_t long_anchor_min_spacing_tokens = 0;
 };
 
 struct FrontendResources;

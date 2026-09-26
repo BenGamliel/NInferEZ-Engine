@@ -190,6 +190,7 @@ EngineOptions normalize_engine_options(EngineOptions options) {
         cache.rolling_retention            = false;
         cache.release_diverged_checkpoints = false;
         cache.thorough_admission_search    = false;
+        cache.automatic_long_anchors       = false;
         return options;
     }
 
@@ -199,7 +200,8 @@ EngineOptions normalize_engine_options(EngineOptions options) {
         cache.max_private_continuations.value_or(static_cast<std::uint32_t>(default_private));
     cache.max_shared_prefixes = cache.max_shared_prefixes.value_or(
         std::max(concurrency, static_cast<std::uint32_t>(kMaximumExplicitPromptCacheMarkers)));
-    cache.max_long_anchors_per_continuation = cache.max_long_anchors_per_continuation.value_or(2U);
+    cache.max_long_anchors_per_continuation =
+        cache.max_long_anchors_per_continuation.value_or(cache.automatic_long_anchors ? 4U : 2U);
     cache.max_cache_markers_per_request     = cache.max_cache_markers_per_request.value_or(4U);
 
     if (*cache.max_private_continuations < concurrency) {
@@ -239,7 +241,13 @@ ModelInstance::ModelInstance(std::unique_ptr<models::qwen3_5::Model> source,
            .vision_max_merged_tokens = options.vision_max_merged_tokens,
            .thinking_budget_message  = options.thinking_budget_message,
            .ngram_sources_enabled    = options.speculative.ngram_draft_tokens != 0,
-           .ngram_archive_enabled    = options.speculative.ngram_archive_bytes != 0})),
+           .ngram_archive_enabled    = options.speculative.ngram_archive_bytes != 0,
+           .automatic_long_anchors =
+               options.context_cache.automatic_long_anchors
+                   ? options.context_cache.max_long_anchors_per_continuation.value_or(0U)
+                   : 0U,
+           .long_anchor_min_spacing_tokens =
+               options.context_cache.long_anchor_min_spacing_tokens})),
       capacity(options.max_context) {}
 
 ModelInstance::~ModelInstance() = default;

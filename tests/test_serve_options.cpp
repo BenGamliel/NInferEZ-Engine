@@ -842,6 +842,25 @@ int main() {
                               !parse({"ninfer-serve", "model.ninfer"})
                                    .context_cache.thorough_admission_search,
                           "--thorough-admission-search was not an off-by-default switch");
+        const ServeOptions automatic_anchors =
+            parse({"ninfer-serve", "model.ninfer", "--auto-long-anchors", "--long-anchor-spacing",
+                   "4096"});
+        failures +=
+            check(!parse({"ninfer-serve", "model.ninfer"}).context_cache.automatic_long_anchors &&
+                      parse({"ninfer-serve", "model.ninfer"})
+                              .context_cache.long_anchor_min_spacing_tokens == 1024U &&
+                      automatic_anchors.context_cache.automatic_long_anchors &&
+                      automatic_anchors.context_cache.long_anchor_min_spacing_tokens == 4096U &&
+                      parse({"ninfer-serve", "model.ninfer", "--auto-long-anchors",
+                             "--long-anchor-spacing", "0"})
+                              .context_cache.long_anchor_min_spacing_tokens == 0U,
+                  "--auto-long-anchors was not an off-by-default switch carrying its spacing");
+        bool spacing_without_anchors_rejected = false;
+        try {
+            (void)parse({"ninfer-serve", "model.ninfer", "--long-anchor-spacing", "512"});
+        } catch (const std::invalid_argument&) { spacing_without_anchors_rejected = true; }
+        failures += check(spacing_without_anchors_rejected,
+                          "--long-anchor-spacing was accepted without --auto-long-anchors");
         failures += check(parse({"ninfer-serve", "model.ninfer", "--assistant-prefill"}).assistant_prefill &&
                               !parse({"ninfer-serve", "model.ninfer"}).assistant_prefill,
                           "--assistant-prefill was not an off-by-default switch");

@@ -180,7 +180,7 @@ struct StartupObserver {
 
 struct ContextCacheOptions {
     // Engine resolves every optional once at construction. With C=max_concurrency, the enabled
-    // defaults are H=C, R=8, Host KV=8 GiB, P=2C, S=max(C,4) and L=2;
+    // defaults are H=C, R=8, Host KV=8 GiB, P=2C, S=max(C,4) and L=2 (4 with automatic anchors);
     // Engine::options() returns those effective values.
     bool enabled = true;
     // Extra Device checkpoint StateImage slots H. Total Device StateImage capacity is C + H.
@@ -223,6 +223,16 @@ struct ContextCacheOptions {
     // while other requests run. Off by default: a new request can then pause running decode for
     // up to that long, where a missed large prefix costs its whole re-prefill.
     bool thorough_admission_search = false;
+    // The engine anchors message boundaries itself: every request offers private long anchors at
+    // up to L message boundaries, on the grid long_anchor_min_spacing_tokens sets, so a later
+    // request that rewrites history there resumes from the anchor instead of root. L then defaults
+    // to 4. Off by default: each anchor costs a prefill split and a StateImage whether or not the
+    // client ever rewrites its history.
+    bool automatic_long_anchors = false;
+    // Minimum token gap between automatic long anchors, doubling per anchor walking back from the
+    // prompt end (gap k >= spacing * 2^k), so the grid is sparse near the end and still reaches
+    // deep history. Zero anchors every one of the last L message boundaries.
+    std::uint32_t long_anchor_min_spacing_tokens = 1024;
 };
 
 struct ContextCostOptions {

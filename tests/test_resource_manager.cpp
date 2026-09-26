@@ -997,13 +997,13 @@ public:
         return transaction_kind_ != TransactionKind::None;
     }
 
-    [[nodiscard]] FakeCaptureAssessment inspect_capture(const FakeCaptureOffer&,
-                                                        const FakeSharedPrefixHandle*,
-                                                        const FakeSharedPrefixHandle*,
-                                                        std::optional<CheckpointRef>,
-                                                        bool permit_shared_publication) const {
+    [[nodiscard]] FakeCaptureAssessment
+    inspect_capture(const FakeCaptureOffer&, const FakeSharedPrefixHandle*,
+                    const FakeSharedPrefixHandle*, std::optional<CheckpointRef> private_replacement,
+                    bool permit_shared_publication) const {
         FakeCaptureAssessment assessment = capture_assessment;
         if (!permit_shared_publication) { assessment.publishes_shared = false; }
+        last_capture_private_replacement = private_replacement;
         return assessment;
     }
 
@@ -1171,6 +1171,8 @@ public:
     bool finish_fail_next                                = false;
     bool finish_release                                  = false;
     bool finish_with_rewrite                             = false;
+    // The private replacement the most recent capture inspection was asked to price.
+    mutable std::optional<CheckpointRef> last_capture_private_replacement;
     bool abort_salvage_next                              = false;
     bool abort_capture_start                             = false;
     bool report_shared_source_summary                    = false;
@@ -3638,6 +3640,30 @@ void test_abort_salvage_earns_disposable_retention_under_pressure() {
             "salvage did not earn Disposable retention below LiveSession");
 }
 
+void test_full_anchor_set_replaces_the_least_coverage_anchor() {
+    // Anchors at 1000, 5000, 5200 and 9000 with a new capture at 12000. Dropping 5200 costs
+    // (5200 - 5000) * (9000 - 5200); every other anchor covers more. The old rule always gave up
+    // the deepest anchor (1000), letting the set drift towards the endpoint.
+    FakeManager manager = make_manager(1, 4, 0);
+    FakeProgram program;
+    const ActiveRequest active = start_active(manager, program, 91, make_base(91), 1);
+    const auto anchor          = [](std::uint32_t frontier, std::uint32_t ordinal) {
+        return CheckpointRef{
+            .kind = CheckpointKind::LongAnchor, .frontier = frontier, .ordinal = ordinal};
+    };
+    program.capture_assessment = FakeCaptureAssessment{
+        .shortlist_key                  = FakeShortlistKey{.digest = 91, .frontier = 12000},
+        .protected_rebuild_work         = PrefillWork{.tokens = 12000},
+        .private_replacement_candidates = {anchor(1000, 1), anchor(5000, 2), anchor(5200, 3),
+                                           anchor(9000, 4)},
+        .publishes_private              = true,
+        .physically_feasible            = true,
+    };
+    (void)manager.reserve_active_capture(program, active.lane, FakeCaptureOffer{.id = 1}, 0, {});
+    require(program.last_capture_private_replacement == anchor(5200, 3),
+            "full anchor set did not give up the anchor whose loss costs the least coverage");
+}
+
 void test_terminal_settlement_waits_for_open_resource_transaction() {
     FakeManager manager = make_manager(2, 3);
     FakeProgram program;
@@ -3979,6 +4005,8 @@ int main() {
     run_test("terminal fallback salvage", test_terminal_fallback_salvage_catalogues);
     run_test("abort salvage earns disposable retention",
              test_abort_salvage_earns_disposable_retention_under_pressure);
+    run_test("full anchor set replaces the least-coverage anchor",
+             test_full_anchor_set_replaces_the_least_coverage_anchor);
     run_test("terminal waits for resource transaction",
              test_terminal_settlement_waits_for_open_resource_transaction);
     run_test("commit and discard", test_commit_and_discard_terminal_states);

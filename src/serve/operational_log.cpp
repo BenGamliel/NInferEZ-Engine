@@ -493,11 +493,12 @@ void OperationalLog::engine_capacity(const GenerationService& service) const {
         // memory summary is captured after that clamp runs, so it carries the true figure.
         logger_->info(
             "context cache | {} active + {} cached device states | host {} states, {} KV | "
-            "private {} | shared {} | anchors {}",
+            "private {} | shared {} | anchors {}{}",
             engine.max_concurrency, *cache.device_state_slots, cache.host_state_slots,
             product::format_pretty_bytes(memory.host_kv_capacity_bytes),
             *cache.max_private_continuations, *cache.max_shared_prefixes,
-            *cache.max_long_anchors_per_continuation);
+            *cache.max_long_anchors_per_continuation,
+            cache.automatic_long_anchors ? " automatic" : "");
     } else {
         logger_->info("context cache | root only");
     }

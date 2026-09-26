@@ -779,7 +779,9 @@ std::string format_server_start_json(
              {"max_cache_markers_per_request", cache.max_cache_markers_per_request.value()},
              {"rolling_retention", cache.rolling_retention},
              {"release_diverged_checkpoints", cache.release_diverged_checkpoints},
-             {"thorough_admission_search", cache.thorough_admission_search}}}};
+             {"thorough_admission_search", cache.thorough_admission_search},
+             {"automatic_long_anchors", cache.automatic_long_anchors},
+             {"long_anchor_min_spacing_tokens", cache.long_anchor_min_spacing_tokens}}}};
     record["sampling_defaults"] =
         Json{{"thinking", preset_json(sampling_defaults.thinking)},
              {"non_thinking", preset_json(sampling_defaults.non_thinking)},

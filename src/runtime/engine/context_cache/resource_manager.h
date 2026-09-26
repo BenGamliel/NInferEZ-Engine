@@ -521,12 +521,8 @@ public:
         std::optional<CheckpointRef> private_replacement;
         if (!private_baseline.private_replacement_candidates.empty()) {
             private_replacement =
-                *std::min_element(private_baseline.private_replacement_candidates.begin(),
-                                  private_baseline.private_replacement_candidates.end(),
-                                  [](CheckpointRef lhs, CheckpointRef rhs) {
-                                      return std::tuple{lhs.kind, lhs.frontier, lhs.ordinal} <
-                                             std::tuple{rhs.kind, rhs.frontier, rhs.ordinal};
-                                  });
+                select_long_anchor_replacement(private_baseline.private_replacement_candidates,
+                                               private_baseline.shortlist_key.frontier);
             private_baseline =
                 program.inspect_capture(offer, nullptr, nullptr, private_replacement, false);
         }
@@ -852,15 +848,9 @@ public:
                     program.inspect_capture(offer, nullptr, nullptr, std::nullopt, false);
                 private_replacement.reset();
                 if (!private_baseline.private_replacement_candidates.empty()) {
-                    private_replacement =
-                        *std::min_element(private_baseline.private_replacement_candidates.begin(),
-                                          private_baseline.private_replacement_candidates.end(),
-                                          [](CheckpointRef lhs, CheckpointRef rhs) {
-                                              return std::tuple{lhs.kind, lhs.frontier,
-                                                                lhs.ordinal} <
-                                                     std::tuple{rhs.kind, rhs.frontier,
-                                                                rhs.ordinal};
-                                          });
+                    private_replacement = select_long_anchor_replacement(
+                        private_baseline.private_replacement_candidates,
+                        private_baseline.shortlist_key.frontier);
                     private_baseline = program.inspect_capture(offer, nullptr, nullptr,
                                                                private_replacement, false);
                 }
@@ -2630,6 +2620,52 @@ private:
         if (summary.rewrite && summary.rewrite->ref == checkpoint) { return true; }
         return std::any_of(summary.long_anchors.begin(), summary.long_anchors.end(),
                            [&](const auto& anchor) { return anchor.ref == checkpoint; });
+    }
+
+    // The long anchor to give up when a full anchor set must make room for a new capture at
+    // `new_frontier`. A request diverging between an anchor and the next retained frontier above
+    // it resumes from that anchor; without it, from the next one below. Removing anchor a
+    // therefore costs about (a - below) extra prefill for each divergence in [a, above), so the
+    // anchor minimising (a - below) * (above - a) loses the least coverage. Always replacing the
+    // deepest anchor dropped exactly the deep history anchors exist for and let the set drift
+    // towards the endpoint. Ties keep the deeper anchor.
+    [[nodiscard]] static CheckpointRef
+    select_long_anchor_replacement(std::span<const CheckpointRef> candidates,
+                                   std::uint32_t new_frontier) {
+        std::vector<std::uint32_t> frontiers;
+        frontiers.reserve(candidates.size() + 1U);
+        for (const CheckpointRef candidate : candidates) {
+            frontiers.push_back(candidate.frontier);
+        }
+        frontiers.push_back(new_frontier);
+        std::sort(frontiers.begin(), frontiers.end());
+
+        std::optional<CheckpointRef> selected;
+        std::uint64_t selected_loss = std::numeric_limits<std::uint64_t>::max();
+        for (const CheckpointRef candidate : candidates) {
+            const auto first =
+                std::lower_bound(frontiers.begin(), frontiers.end(), candidate.frontier);
+            const auto last    = std::upper_bound(first, frontiers.end(), candidate.frontier);
+            std::uint64_t loss = 0;
+            // A frontier held twice (an anchor duplicating another, or the new capture itself)
+            // loses nothing when one copy goes.
+            if (last - first == 1) {
+                const std::uint64_t below     = first == frontiers.begin() ? 0U : *(first - 1);
+                const std::uint64_t gap_below = candidate.frontier - below;
+                const std::uint64_t gap_above =
+                    last == frontiers.end() ? gap_below : *last - candidate.frontier;
+                loss = gap_below * gap_above;
+            }
+            const bool better =
+                !selected || loss < selected_loss ||
+                (loss == selected_loss && std::tuple{candidate.frontier, candidate.ordinal} >
+                                              std::tuple{selected->frontier, selected->ordinal});
+            if (better) {
+                selected      = candidate;
+                selected_loss = loss;
+            }
+        }
+        return *selected;
     }
 
     [[nodiscard]] static std::uint32_t

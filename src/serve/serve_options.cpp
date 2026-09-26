@@ -83,7 +83,8 @@ std::string serve_usage_text(const char* argv0) {
            "[--media-preprocess-threads N] "
            "[--device-state-slots N] [--host-state-slots N] [--host-kv-mib N] "
            "[--max-private-continuations N] [--max-shared-prefixes N] "
-           "[--max-long-anchors-per-continuation N] [--max-cache-markers-per-request N] "
+           "[--max-long-anchors-per-continuation N] [--auto-long-anchors] "
+           "[--long-anchor-spacing N] [--max-cache-markers-per-request N] "
            "[--disk-kv-path DIR] [--disk-kv-gib N] [--disk-kv-restore] [--disk-kv-directstorage] "
            "[--first-token-logprobs] "
            "[--context-cache-policy default|rolling] [--release-diverged-checkpoints] "
@@ -157,7 +158,8 @@ std::string serve_usage_text(const char* argv0) {
            "allowance in MiB, which is subtracted from the KV sizing budget; "
            "0 keeps the computed per-profile allowance\n"
            "       context cache defaults: device-state=max-concurrency, private=2x concurrency, "
-           "shared=max(max-concurrency,4), anchors=2; Host state=8 slots, Host KV=8192 MiB\n"
+           "shared=max(max-concurrency,4), anchors=2 (4 with --auto-long-anchors); Host state=8 "
+           "slots, Host KV=8192 MiB\n"
            "       --device-state-slots is extra checkpoint capacity beyond active lanes; "
            "--host-kv-mib uses MiB\n"
            "       --disk-kv-path DIR adds a disk tier: evicted continuations write their KV and "
@@ -176,6 +178,11 @@ std::string serve_usage_text(const char* argv0) {
            "checkpoint that its next prompt diverges from, so that checkpoint goes first\n"
            "       --concurrent-prefill admits waiting requests to free lanes while other requests "
            "prefill, instead of holding admission until the staged prefill finishes\n"
+           "       --auto-long-anchors anchors up to --max-long-anchors-per-continuation message "
+           "boundaries of every request (default 4 with it), so a request that rewrites earlier "
+           "history resumes from the nearest anchor instead of root; the anchors sit at least "
+           "--long-anchor-spacing tokens apart (default 1024, 0 anchors every boundary), the gap "
+           "doubling per anchor back from the prompt end\n"
            "       --thorough-admission-search searches up to 250 ms for a new request's reuse plan "
            "even while other requests decode, instead of 10 ms, and grants a costly request a "
            "longer search\n"
@@ -267,11 +274,12 @@ ServeOptions parse_serve_options(int argc, char** argv) {
         options.startup_argv.emplace_back(argv[i] == nullptr ? "" : argv[i]);
         redact_next = options.startup_argv.back() == "--api-key";
     }
-    bool default_max_tokens_explicit = false;
-    bool kv_capacity_explicit        = false;
-    bool device_explicit             = false;
-    bool context_capacity_explicit   = false;
-    bool ngram_width_explicit        = false;
+    bool default_max_tokens_explicit  = false;
+    bool kv_capacity_explicit         = false;
+    bool device_explicit              = false;
+    bool context_capacity_explicit    = false;
+    bool long_anchor_spacing_explicit = false;
+    bool ngram_width_explicit         = false;
     std::optional<std::size_t> kv_headroom_mib;
     if (argc >= 2 && (std::string(argv[1]) == "--help" || std::string(argv[1]) == "-h")) {
         options.help_requested = true;
@@ -432,6 +440,14 @@ ServeOptions parse_serve_options(int argc, char** argv) {
                 parse_nonnegative_int(require_value("--max-long-anchors-per-continuation"),
                                       "max-long-anchors-per-continuation"));
             context_capacity_explicit = true;
+        } else if (arg == "--auto-long-anchors") {
+            options.context_cache.automatic_long_anchors = true;
+            context_capacity_explicit                    = true;
+        } else if (arg == "--long-anchor-spacing") {
+            options.context_cache.long_anchor_min_spacing_tokens = static_cast<std::uint32_t>(
+                parse_nonnegative_int(require_value("--long-anchor-spacing"),
+                                      "long-anchor-spacing"));
+            long_anchor_spacing_explicit = true;
         } else if (arg == "--max-cache-markers-per-request") {
             options.context_cache.max_cache_markers_per_request = static_cast<std::uint32_t>(
                 parse_nonnegative_int(require_value("--max-cache-markers-per-request"),
@@ -647,6 +663,9 @@ ServeOptions parse_serve_options(int argc, char** argv) {
             throw std::invalid_argument("--kv-headroom-mib requires --kv-capacity auto");
         }
         options.kv_capacity = KvCapacityPolicy::automatic(*kv_headroom_mib << 20);
+    }
+    if (long_anchor_spacing_explicit && !options.context_cache.automatic_long_anchors) {
+        throw std::invalid_argument("--long-anchor-spacing requires --auto-long-anchors");
     }
     if (!options.allow_prefix_reuse) {
         if (context_capacity_explicit) {
