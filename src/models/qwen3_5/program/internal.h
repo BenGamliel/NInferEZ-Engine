@@ -10,6 +10,9 @@ namespace ninfer::models::qwen3_5 {
 inline constexpr std::uint32_t kPrefillChunkAlignment    = 128;
 inline constexpr std::uint32_t kMaximumMtpDraftTokens    = 15;
 inline constexpr std::uint32_t kMaximumDFlashDraftTokens = 15;
+// Abort salvage publishes the live state only when it covers enough committed work that the
+// saved rebuild outweighs the checkpoint's retention cost.
+inline constexpr std::uint32_t kSalvageMinFrontier = 1024;
 
 [[nodiscard]] inline bool wide_residual_verification(TextPhase phase, std::int32_t batch,
                                                      std::int32_t first, std::int32_t last) {

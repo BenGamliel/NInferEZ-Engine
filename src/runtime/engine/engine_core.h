@@ -1047,6 +1047,7 @@ private:
                 resources_.finish(*instance_.program, *request->lane, *request->sequence);
             request->generation_timings = finished.timings;
             request->speculative_stats  = std::move(finished.speculative);
+            if (finished.salvaged) { ++cumulative_stats_.salvaged_continuations; }
             request->terminal_reason.reset();
 
             finish_engine_phase(boundary, EngineHostPhase::Boundary);
@@ -1077,6 +1078,7 @@ private:
             auto aborted = resources_.abort(*instance_.program, *request->lane, *request->sequence);
             request->generation_timings = aborted.timings;
             request->speculative_stats  = std::move(aborted.speculative);
+            if (aborted.salvaged) { ++cumulative_stats_.salvaged_continuations; }
             if (scheduler_.owns_prefill_lane(lane)) { scheduler_.clear_prefill_lane(lane); }
             append_output(request, request->output.commit_preview());
             finish_engine_phase(boundary, EngineHostPhase::Boundary);

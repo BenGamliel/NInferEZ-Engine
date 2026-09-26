@@ -610,6 +610,8 @@ int main() {
     throughput.current.pressure_private_owners_degraded = 1;
     throughput.current.pressure_checkpoints_dropped     = 1;
     throughput.current.pressure_searches                = 1;
+    throughput.previous.salvaged_continuations          = 1;
+    throughput.current.salvaged_continuations           = 3;
     throughput.current.host_work                        = {
                                .engine_boundary_ns            = 1000000,
                                .program_submit_ns             = 2000000,
@@ -704,6 +706,7 @@ int main() {
             throughput_json.at("context_cache").at("occupancy").at("device_state_slots") == 3 &&
             throughput_json.at("context_cache").at("pressure").at("spill_pages") == 4 &&
             throughput_json.at("context_cache").at("pressure").at("private_owners_degraded") == 1 &&
+            throughput_json.at("context_cache").at("salvage").at("published") == 2 &&
             !throughput_json.at("context_cache").contains("last_materialization"),
         "context-cache throughput statistics missing or not interval-scoped");
 
