@@ -49,12 +49,11 @@ struct PhysicalUsageSnapshot {
                                                    const PhysicalUsageSnapshot&) noexcept = default;
 };
 
-// Device KV pages a settled lease still needs beyond what its pools can currently reserve.
+// Device KV pages a settled lease's smallest growth step still needs beyond what its pools can
+// currently reserve.
 struct DeviceKVLeaseShortfall {
-    std::uint32_t main_pages            = 0; // the full growth step
-    std::uint32_t backend_pages         = 0;
-    std::uint32_t minimum_main_pages    = 0; // the smallest growth step
-    std::uint32_t minimum_backend_pages = 0;
+    std::uint32_t main_pages    = 0;
+    std::uint32_t backend_pages = 0;
 };
 
 struct DeviceKVPages {
@@ -1017,8 +1016,8 @@ public:
     device_kv_lease_settlement_tokens(SequenceHandle sequence,
                                       std::uint32_t forced_span_tokens) const noexcept;
     // When an active sequence's lease settled because its pools had no space (not because it
-    // reached its output ceiling): the pages still missing for its next growth step. The caller
-    // may free retained cache and resume the lease before it bounds the sequence's budget.
+    // reached its output ceiling): the pages still missing for its smallest growth step. The
+    // caller may free retained cache and resume the lease before it bounds the sequence's budget.
     [[nodiscard]] std::optional<DeviceKVLeaseShortfall>
     device_kv_lease_shortfall(SequenceHandle sequence) const noexcept;
     // Re-opens growth of a space-settled lease once its smallest step fits; the next decode

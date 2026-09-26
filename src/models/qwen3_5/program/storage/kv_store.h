@@ -860,6 +860,9 @@ public:
 
     [[nodiscard]] std::uint32_t occupied() const noexcept { return capacity() - free_count_; }
 
+    // The most pages one address may map or be entitled to.
+    [[nodiscard]] std::uint32_t page_capacity() const noexcept { return page_capacity_; }
+
     // `streams` carries every rank's stream: activation publishes the row's table to each replica.
     [[nodiscard]] std::optional<KVAddressSpaceHandle>
     create_active(std::uint32_t entitlement, std::int32_t execution_row, RankStreams streams) {

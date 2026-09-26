@@ -452,10 +452,9 @@ struct RequestControl {
     // frontier its lease covers with its generation limit reason instead of failing a launch on
     // coverage.
     bool lease_settled = false;
-    // A settlement caused by pool space rather than the output ceiling, and the entitlements its
-    // full and smallest growth steps asked for: retained cache may give those pages back.
+    // A settlement caused by pool space rather than the output ceiling, and the entitlement its
+    // smallest growth step asked for: retained cache may give those pages back.
     bool lease_space_limited = false;
-    DeviceKVPages lease_full_target;
     DeviceKVPages lease_minimum_target;
 
     struct Prefill {

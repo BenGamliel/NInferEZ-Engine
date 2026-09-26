@@ -2033,8 +2033,8 @@ private:
                                        "retained cache owner(s); still short %u main / %u backend "
                                        "pages for its smallest step, so the answer ends early "
                                        "with finish_reason length",
-                                       lane, released, shortfall->minimum_main_pages,
-                                       shortfall->minimum_backend_pages);
+                                       lane, released, shortfall->main_pages,
+                                       shortfall->backend_pages);
                 }
             }
             const std::uint32_t control = request->output.control_suffix_tokens();
