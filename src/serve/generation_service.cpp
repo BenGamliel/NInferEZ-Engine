@@ -22,6 +22,7 @@ struct RequestCapacity {
 
     std::mutex mutex;
     std::size_t active = 0;
+    std::size_t peak   = 0;
     const std::size_t maximum;
 };
 
@@ -331,6 +332,11 @@ std::size_t GenerationService::admitted_requests() const {
     return request_capacity_->active;
 }
 
+std::size_t GenerationService::peak_admitted_requests() const {
+    std::lock_guard lock(request_capacity_->mutex);
+    return request_capacity_->peak;
+}
+
 std::shared_ptr<RequestLifetime>
 GenerationService::acquire_request_lifetime(DeadlinePolicy deadline_policy) const {
     const auto started = Clock::now();
@@ -341,6 +347,7 @@ GenerationService::acquire_request_lifetime(DeadlinePolicy deadline_policy) cons
                                                      "inference request queue is full"));
         }
         ++request_capacity_->active;
+        request_capacity_->peak = std::max(request_capacity_->peak, request_capacity_->active);
     }
     try {
         const Clock::time_point deadline =

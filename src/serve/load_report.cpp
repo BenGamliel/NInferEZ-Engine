@@ -1,5 +1,8 @@
 #include "serve/load_report.h"
 
+#include "serve/request_events.h"
+#include "serve/request_log.h"
+
 #include <nlohmann/json.hpp>
 
 #include <cmath>
@@ -24,8 +27,11 @@ LoadCapacity make_load_capacity(std::string model_id, const ninfer::EngineOption
     return capacity;
 }
 
-std::string make_load_report(const LoadCapacity& capacity, const LoadSample& sample) {
-    using Json        = nlohmann::json;
+namespace {
+
+using Json = nlohmann::json;
+
+Json load_report(const LoadCapacity& capacity, const LoadSample& sample) {
     const auto& stats = sample.stats;
     // kv_capacity is page_groups * page_tokens exactly (SequenceCapacityCurve::resolved_tokens).
     const std::uint32_t page_tokens =
@@ -67,6 +73,34 @@ std::string make_load_report(const LoadCapacity& capacity, const LoadSample& sam
                           {"decode_rounds", stats.decode_rounds},
                           {"decode_row_rounds", stats.decode_row_rounds}}},
     };
+    return report;
+}
+
+} // namespace
+
+std::string make_load_report(const LoadCapacity& capacity, const LoadSample& sample) {
+    return load_report(capacity, sample).dump();
+}
+
+std::string make_stats_report(const LoadCapacity& capacity, const LoadSample& sample) {
+    Json report                         = load_report(capacity, sample);
+    report["object"]                    = "ninfer.stats";
+    report["requests"]["peak_admitted"] = sample.peak_admitted_requests;
+    const ninfer::RuntimeStats& stats   = sample.stats;
+    const ThroughputReport since_startup{
+        .interval_seconds = std::isfinite(sample.uptime_seconds) ? sample.uptime_seconds : 0.0,
+        .computed_prefill_tokens = stats.computed_prefill_tokens,
+        .committed_decode_tokens = stats.committed_decode_tokens,
+        .decode_rounds           = stats.decode_rounds,
+        .decode_row_rounds       = stats.decode_row_rounds,
+        .previous                = {},
+        .current                 = stats,
+    };
+    Json cumulative = Json::parse(format_throughput_json({}, 0, since_startup));
+    for (const char* block : {"tokens", "throughput_tokens_per_second", "scheduler", "decode_batch",
+                              "host_work", "context_cache"}) {
+        report[block] = std::move(cumulative.at(block));
+    }
     return report.dump();
 }
 

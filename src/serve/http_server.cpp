@@ -29,8 +29,8 @@ constexpr std::string_view kCorsAllowedHeaders =
 // API routes keep their own 404s. Every other GET path belongs to the WebUI, whose client-side
 // router owns paths the server has no file for.
 bool is_api_path(std::string_view path) {
-    return path == "/v1" || path.starts_with("/v1/") || path == "/health" ||
-           path == "/metrics" || path == "/slots" || path == "/props" || path == kMcpProxyPath;
+    return path == "/v1" || path.starts_with("/v1/") || path == "/health" || path == "/metrics" ||
+           path == "/stats" || path == "/slots" || path == "/props" || path == kMcpProxyPath;
 }
 
 
@@ -153,6 +153,7 @@ const char* endpoint_name(std::string_view path) noexcept {
     if (path == "/v1/messages") { return "anthropic_messages"; }
     if (path == "/v1/messages/count_tokens") { return "anthropic_count_tokens"; }
     if (path == "/v1/load") { return "load"; }
+    if (path == "/stats") { return "stats"; }
     return "http_route";
 }
 
@@ -264,6 +265,7 @@ HttpServer::HttpServer(ServeOptions options, std::shared_ptr<spdlog::logger> log
     server_.set_socket_options(configure_http_server_socket);
     server_.set_payload_max_length(options_.max_request_bytes);
     register_routes();
+    if (options_.stats_port != 0) { register_stats_routes(); }
 }
 
 HttpServer::RequestLifecycle::RequestLifecycle(HttpServer& owner, RequestLogContext context)
@@ -377,6 +379,59 @@ void HttpServer::stop_stats_reporter() {
     stats_thread_.join();
 }
 
+httplib::Server::HandlerResponse HttpServer::pre_route(const httplib::Request& req,
+                                                       httplib::Response& res) const {
+    ensure_openai_request_id(req, res);
+    if (!ready_.load(std::memory_order_acquire)) {
+        // Runs for every route, including /health and OPTIONS, so a caller cannot tell "not
+        // ready" apart from "unauthenticated" -- and skips the API-key check below, since a
+        // loading-status response carries nothing worth protecting.
+        ApiError error;
+        error.status  = 503;
+        error.type    = "service_unavailable";
+        error.code    = "model_loading";
+        error.message = "The model is still loading. Retry shortly.";
+        // Weight load plus warmup measured ~10s on the 27B and longer on the 35B. Two seconds
+        // is a polite poll interval rather than a promise about when readiness arrives.
+        res.set_header("Retry-After", "2");
+        if (req.path.rfind("/v1/messages", 0) == 0) {
+            write_anthropic_error(res, error, new_anthropic_request_id());
+        } else {
+            write_openai_error(res, error);
+        }
+        return httplib::Server::HandlerResponse::Handled;
+    }
+    // The MCP relay carries no API key: the WebUI prefixes every header it means for the MCP
+    // server, its own Authorization included, so requiring the key would break the relay
+    // rather than protect it. It is opt-in, and the bind address is its boundary.
+    if (options_.api_key.empty() || req.path == "/health" || req.method == "OPTIONS" ||
+        (options_.webui_mcp_proxy && req.path == kMcpProxyPath) ||
+        (webui_enabled() && req.method == "GET" && !is_api_path(req.path))) {
+        return httplib::Server::HandlerResponse::Unhandled;
+    }
+    // Accept both the OpenAI-style bearer token and the Anthropic-style
+    // x-api-key header so OpenAI clients and Claude Code (ANTHROPIC_API_KEY
+    // -> x-api-key, ANTHROPIC_AUTH_TOKEN -> Authorization: Bearer) both work.
+    const bool bearer_ok =
+        matches_bearer_credential(req.get_header_value("Authorization"), options_.api_key);
+    const bool x_api_key_ok = req.get_header_value("x-api-key") == options_.api_key;
+    if (!bearer_ok && !x_api_key_ok) {
+        ApiError error;
+        error.status  = 401;
+        error.type    = "invalid_request_error";
+        error.code    = "invalid_api_key";
+        error.message = "missing or invalid API key";
+        // Render the 401 in the shape the target endpoint speaks.
+        if (req.path.rfind("/v1/messages", 0) == 0) {
+            write_anthropic_error(res, error, new_anthropic_request_id());
+        } else {
+            write_openai_error(res, error);
+        }
+        return httplib::Server::HandlerResponse::Handled;
+    }
+    return httplib::Server::HandlerResponse::Unhandled;
+}
+
 void HttpServer::register_routes() {
     server_.set_error_handler([this](const httplib::Request& request, httplib::Response& response) {
         return handle_unrendered_http_error(options_, request, response);
@@ -403,55 +458,7 @@ void HttpServer::register_routes() {
     }
 
     server_.set_pre_routing_handler([this](const httplib::Request& req, httplib::Response& res) {
-        ensure_openai_request_id(req, res);
-        if (!ready_.load(std::memory_order_acquire)) {
-            // Runs for every route, including /health and OPTIONS, so a caller cannot tell "not
-            // ready" apart from "unauthenticated" -- and skips the API-key check below, since a
-            // loading-status response carries nothing worth protecting.
-            ApiError error;
-            error.status  = 503;
-            error.type    = "service_unavailable";
-            error.code    = "model_loading";
-            error.message = "The model is still loading. Retry shortly.";
-            // Weight load plus warmup measured ~10s on the 27B and longer on the 35B. Two seconds
-            // is a polite poll interval rather than a promise about when readiness arrives.
-            res.set_header("Retry-After", "2");
-            if (req.path.rfind("/v1/messages", 0) == 0) {
-                write_anthropic_error(res, error, new_anthropic_request_id());
-            } else {
-                write_openai_error(res, error);
-            }
-            return httplib::Server::HandlerResponse::Handled;
-        }
-        // The MCP relay carries no API key: the WebUI prefixes every header it means for the MCP
-        // server, its own Authorization included, so requiring the key would break the relay
-        // rather than protect it. It is opt-in, and the bind address is its boundary.
-        if (options_.api_key.empty() || req.path == "/health" || req.method == "OPTIONS" ||
-            (options_.webui_mcp_proxy && req.path == kMcpProxyPath) ||
-            (webui_enabled() && req.method == "GET" && !is_api_path(req.path))) {
-            return httplib::Server::HandlerResponse::Unhandled;
-        }
-        // Accept both the OpenAI-style bearer token and the Anthropic-style
-        // x-api-key header so OpenAI clients and Claude Code (ANTHROPIC_API_KEY
-        // -> x-api-key, ANTHROPIC_AUTH_TOKEN -> Authorization: Bearer) both work.
-        const bool bearer_ok =
-            matches_bearer_credential(req.get_header_value("Authorization"), options_.api_key);
-        const bool x_api_key_ok = req.get_header_value("x-api-key") == options_.api_key;
-        if (!bearer_ok && !x_api_key_ok) {
-            ApiError error;
-            error.status  = 401;
-            error.type    = "invalid_request_error";
-            error.code    = "invalid_api_key";
-            error.message = "missing or invalid API key";
-            // Render the 401 in the shape the target endpoint speaks.
-            if (req.path.rfind("/v1/messages", 0) == 0) {
-                write_anthropic_error(res, error, new_anthropic_request_id());
-            } else {
-                write_openai_error(res, error);
-            }
-            return httplib::Server::HandlerResponse::Handled;
-        }
-        return httplib::Server::HandlerResponse::Unhandled;
+        return pre_route(req, res);
     });
 
     server_.set_exception_handler(
@@ -501,17 +508,16 @@ void HttpServer::register_routes() {
             }
         });
 
-    server_.Get("/health", [this](const httplib::Request&, httplib::Response& res) {
-        const bool available = service_ != nullptr && service_->is_available();
-        res.status           = available ? 200 : 503;
-        res.set_content(nlohmann::json{{"status", available ? "ok" : "unavailable"}}.dump(),
-                        "application/json");
-    });
+    server_.Get("/health",
+                [this](const httplib::Request&, httplib::Response& res) { handle_health(res); });
     server_.Get("/v1/load", [this](const httplib::Request& req, httplib::Response& res) {
         handle_load(req, res);
     });
     server_.Get("/metrics", [this](const httplib::Request& req, httplib::Response& res) {
         handle_metrics(req, res);
+    });
+    server_.Get("/stats", [this](const httplib::Request& req, httplib::Response& res) {
+        handle_stats(req, res);
     });
     server_.Get("/slots", [this](const httplib::Request& req, httplib::Response& res) {
         handle_slots(req, res);
@@ -620,7 +626,8 @@ LoadSample HttpServer::load_sample() const {
     LoadSample sample;
     sample.uptime_seconds =
         std::chrono::duration<double>(std::chrono::steady_clock::now() - attached_at_).count();
-    sample.admitted_requests = service_->admitted_requests();
+    sample.admitted_requests      = service_->admitted_requests();
+    sample.peak_admitted_requests = service_->peak_admitted_requests();
     sample.stats             = service_->runtime_stats();
     return sample;
 }
@@ -628,6 +635,41 @@ LoadSample HttpServer::load_sample() const {
 void HttpServer::handle_load(const httplib::Request&, httplib::Response& res) const {
     res.set_header("Cache-Control", "no-store");
     res.set_content(make_load_report(load_capacity_, load_sample()), "application/json");
+}
+
+void HttpServer::handle_stats(const httplib::Request&, httplib::Response& res) const {
+    res.set_header("Cache-Control", "no-store");
+    res.set_content(make_stats_report(load_capacity_, load_sample()), "application/json");
+}
+
+// The pollers' own listener: one worker and no generation routes, so a dashboard or watchdog is
+// never queued behind the connections the request pool is serving. It applies the same readiness
+// and API-key rules as the main listener.
+void HttpServer::register_stats_routes() {
+    stats_server_.new_task_queue = [] { return new httplib::ThreadPool(1, 1, 64); };
+    stats_server_.set_socket_options(configure_http_server_socket);
+    stats_server_.set_pre_routing_handler(
+        [this](const httplib::Request& req, httplib::Response& res) {
+            return pre_route(req, res);
+        });
+    stats_server_.Get(
+        "/health", [this](const httplib::Request&, httplib::Response& res) { handle_health(res); });
+    stats_server_.Get("/stats", [this](const httplib::Request& req, httplib::Response& res) {
+        handle_stats(req, res);
+    });
+    stats_server_.Get("/v1/load", [this](const httplib::Request& req, httplib::Response& res) {
+        handle_load(req, res);
+    });
+    stats_server_.Get("/metrics", [this](const httplib::Request& req, httplib::Response& res) {
+        handle_metrics(req, res);
+    });
+}
+
+void HttpServer::handle_health(httplib::Response& res) const {
+    const bool available = service_ != nullptr && service_->is_available();
+    res.status           = available ? 200 : 503;
+    res.set_content(nlohmann::json{{"status", available ? "ok" : "unavailable"}}.dump(),
+                    "application/json");
 }
 
 void HttpServer::handle_metrics(const httplib::Request&, httplib::Response& res) const {
@@ -711,7 +753,26 @@ void HttpServer::handle_model(const httplib::Request& req, httplib::Response& re
                     "application/json");
 }
 
-bool HttpServer::bind() { return server_.bind_to_port(options_.host, options_.port); }
+bool HttpServer::bind() {
+    return server_.bind_to_port(options_.host, options_.port) &&
+           (options_.stats_port == 0 ||
+            stats_server_.bind_to_port(options_.host, options_.stats_port));
+}
+
+void HttpServer::start_stats_listener() {
+    if (options_.stats_port == 0 || stats_listener_.joinable()) { return; }
+    stats_listener_ = std::thread([this] {
+        try {
+            (void)stats_server_.listen_after_bind();
+        } catch (const std::exception&) {}
+    });
+}
+
+void HttpServer::stop_stats_listener() {
+    if (!stats_listener_.joinable()) { return; }
+    stats_server_.stop();
+    stats_listener_.join();
+}
 
 void HttpServer::start_serving_during_startup() {
     if (startup_listener_.joinable()) {
@@ -721,6 +782,7 @@ void HttpServer::start_serving_during_startup() {
     // The readiness gate lives in register_routes()'s single pre-routing handler, ahead of the
     // API-key check -- not here, so starting this listener never replaces (and thereby drops) the
     // auth/request-ID middleware for the remainder of the process's life.
+    start_stats_listener();
     startup_listener_ = std::thread([this] {
         // listen_after_bind() blocks here for the whole life of the server, spanning the switch
         // from 503 to serving. stop() is what ends it. It can also throw before ever reaching
@@ -768,6 +830,7 @@ bool HttpServer::listen() {
     }
     if (console_stats_) { console_stats_->show(); }
     try {
+        start_stats_listener();
         if (options_.log_stats_interval_ms != 0) {
             stats_stopping_ = false;
             stats_thread_   = std::thread([this] { run_stats_reporter(); });
@@ -777,9 +840,11 @@ bool HttpServer::listen() {
         // socket from two threads. Wait for that loop instead.
         const bool result =
             startup_listener_.joinable() ? await_startup_listener() : server_.listen_after_bind();
+        stop_stats_listener();
         stop_stats_reporter();
         return result;
     } catch (...) {
+        stop_stats_listener();
         stop_stats_reporter();
         // Stop and join the startup listener before this exception unwinds past us. attach() has
         // already run by the time listen() can be called, so that thread is live against
@@ -794,9 +859,13 @@ bool HttpServer::listen() {
     }
 }
 
-void HttpServer::stop() { server_.stop(); }
+void HttpServer::stop() {
+    stats_server_.stop();
+    server_.stop();
+}
 
 HttpServer::~HttpServer() {
+    stop_stats_listener();
     if (startup_listener_.joinable()) {
         server_.stop();
         startup_listener_.join();

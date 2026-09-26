@@ -26,6 +26,9 @@ struct ServeOptions {
     std::filesystem::path chat_template_path;
     std::string host = "127.0.0.1";
     int port         = 8080;
+    // --stats-port: also serve /health, /stats, /v1/load and /metrics on this port with one
+    // worker of their own (0 = off).
+    int stats_port = 0;
     std::string api_key;                          // empty => no auth
     std::optional<std::string> model_id_override; // unset => artifact metadata.name
     std::string request_log_jsonl;                // empty => structured request logging disabled

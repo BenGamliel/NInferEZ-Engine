@@ -32,6 +32,8 @@ struct LoadSample {
     // response. Admission rejects with 429 once this reaches max_concurrency +
     // max_pending_requests.
     std::size_t admitted_requests = 0;
+    // The most requests admitted at once since startup; /stats reports it, /v1/load does not.
+    std::size_t peak_admitted_requests = 0;
     ninfer::RuntimeStats stats;
 };
 
@@ -41,5 +43,9 @@ struct LoadSample {
 
 // Renders the /v1/load JSON body.
 [[nodiscard]] std::string make_load_report(const LoadCapacity& capacity, const LoadSample& sample);
+
+// Renders the /stats JSON body: the /v1/load report with the ingress peak, and every Engine
+// counter since startup in the throughput record's shape, its interval the uptime.
+[[nodiscard]] std::string make_stats_report(const LoadCapacity& capacity, const LoadSample& sample);
 
 } // namespace ninfer::serve

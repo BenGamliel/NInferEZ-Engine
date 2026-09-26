@@ -107,6 +107,35 @@ int main() {
                           degenerate.at("occupancy").at("device_main_kv_tokens") == 0,
                       "zero page groups renders zero page size");
 
+    // /stats: the same snapshot with the ingress peak, and the Engine counters since startup in
+    // the throughput record's shape, averaged over the uptime.
+    sample.peak_admitted_requests                 = 9;
+    sample.stats.computed_prefill_tokens          = 5000;
+    sample.stats.committed_decode_tokens          = 250;
+    sample.stats.active_captures_completed        = 3;
+    sample.stats.pressure_private_owners_demoted  = 2;
+    sample.stats.pressure_private_owners_degraded = 2;
+    const Json stats = Json::parse(make_stats_report(capacity, sample));
+    failures += check(stats.at("object") == "ninfer.stats" &&
+                          stats.at("capacity") == report.at("capacity") &&
+                          stats.at("requests").at("admitted") == 6 &&
+                          stats.at("requests").at("peak_admitted") == 9,
+                      "stats report does not extend the load report with the ingress peak");
+    failures += check(stats.at("tokens").at("computed_prefill") == 5000 &&
+                          stats.at("tokens").at("committed_decode") == 250 &&
+                          stats.at("throughput_tokens_per_second").at("prefill") == 400.0 &&
+                          stats.at("throughput_tokens_per_second").at("decode") == 20.0,
+                      "stats report does not average the counters over the uptime");
+    failures +=
+        check(stats.at("context_cache").at("captures").at("completed") == 3 &&
+                  stats.at("context_cache").at("pressure").at("private_owners_demoted") == 2 &&
+                  stats.at("scheduler").at("running") == 4 && stats.contains("host_work") &&
+                  stats.contains("decode_batch"),
+              "stats report does not carry the cumulative context-cache counters");
+    failures += check(
+        !Json::parse(make_load_report(capacity, sample)).at("requests").contains("peak_admitted"),
+        "the load report grew the stats-only ingress peak");
+
     if (failures != 0) { std::cerr << failures << " load report check(s) failed\n"; }
     return failures == 0 ? 0 : 1;
 }

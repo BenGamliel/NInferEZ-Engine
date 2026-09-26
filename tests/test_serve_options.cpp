@@ -978,6 +978,7 @@ int main() {
                                         "--seed",
                                         "--spec",
                                         "--stage-layers",
+                                        "--stats-port",
                                         "--structured-output",
                                         "--temperature",
                                         "--thinking-budget-message",
@@ -1199,6 +1200,17 @@ int main() {
                           .context_cache.recency_eviction &&
                       !parse({"ninfer-serve", "model.ninfer"}).context_cache.recency_eviction,
                   "--recency-eviction was not an off-by-default switch");
+        failures += check(
+            parse({"ninfer-serve", "model.ninfer", "--stats-port", "8081"}).stats_port == 8081 &&
+                parse({"ninfer-serve", "model.ninfer"}).stats_port == 0,
+            "--stats-port was not an off-by-default port");
+        for (const char* stats_port : {"8080", "65536"}) {
+            bool rejected = false;
+            try {
+                (void)parse({"ninfer-serve", "model.ninfer", "--stats-port", stats_port});
+            } catch (const std::invalid_argument&) { rejected = true; }
+            failures += check(rejected, "--stats-port accepted the main port or an invalid port");
+        }
         failures +=
             check(parse({"ninfer-serve", "model.ninfer", "--value-aware-demote"})
                           .context_cache.value_aware_demote &&

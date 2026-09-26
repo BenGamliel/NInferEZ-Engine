@@ -222,6 +222,7 @@ this adds a CPU synchronization point and mask transfers per round. No speedup c
 | `GET /health` | process health |
 | `GET /v1/load` | serving capacity, current load, and monotonic token counters (see [Load](#load)) |
 | `GET /metrics` | Prometheus text with llama.cpp's `--metrics` series plus NInfer's (see [Metrics](#metrics)) |
+| `GET /stats` | the `/v1/load` snapshot plus the ingress peak and every Engine counter since startup (see [Stats](#stats)) |
 | `GET /slots` | llama.cpp-shaped lane table: one entry per lane, the first `running` marked processing |
 | `GET /props` | llama.cpp-shaped server properties: default sampling, context, lanes, modalities |
 | `GET /v1` | endpoint index for the announced API base: the model alias and this table |
@@ -329,6 +330,15 @@ curl http://127.0.0.1:8080/v1/load -H 'Authorization: Bearer local-secret'
   several tokens per row. `decode_row_rounds` is the sum of decode batch sizes over `decode_rounds`.
 - Gauges and counters come from the snapshot the Engine publishes at execution boundaries, so they
   can trail the instant of the poll by up to one boundary.
+
+### Stats
+
+`GET /stats` is the `/v1/load` report (`object` `ninfer.stats`) with `requests.peak_admitted`, the
+most requests admitted at once since startup, and the Engine's counters since startup in the shape of
+the request log's `throughput` record (see [Structured request log](#structured-request-log)):
+`tokens`, `throughput_tokens_per_second` averaged over the uptime, `scheduler`, `decode_batch`,
+`host_work` and the `context_cache` counters and gauges. It needs the API key like `/v1/load` and,
+like it, reads only published snapshots. Dashboards poll it, or the same route on `--stats-port`.
 
 ### Metrics
 
@@ -1111,8 +1121,8 @@ curl http://127.0.0.1:8080/v1/messages/count_tokens \
 ## Authentication and CORS
 
 Pass `--api-key VALUE` to require the same value as an OpenAI bearer token or Anthropic
-`x-api-key` header. `GET /health` and CORS preflight requests remain unauthenticated; `GET /v1/load`
-requires the key.
+`x-api-key` header. `GET /health` and CORS preflight requests remain unauthenticated; `GET /v1/load`,
+`GET /stats` and `GET /metrics` require the key, on `--stats-port` too.
 
 ```bash
 curl http://127.0.0.1:8080/v1/models \
@@ -1135,6 +1145,7 @@ The table lists executable defaults. The startup example selects a long-context 
 |---|---|---:|
 | `--host H` | listen address | `127.0.0.1` |
 | `--port N` | listen port | `8080` |
+| `--stats-port N` | also serve `GET /health`, `/stats`, `/v1/load` and `/metrics` on port `N` of the same address, with one worker of their own, so a dashboard or watchdog is never queued behind the connections the request pool serves; the readiness and API-key rules are the main listener's | off |
 | `--api-key KEY` | required bearer or `x-api-key` value | unset |
 | `--model-id ID` | override the public OpenAI model alias | artifact `identity.model_id` |
 | `--max-context N` | logical context ceiling of each sequence | `8192` |

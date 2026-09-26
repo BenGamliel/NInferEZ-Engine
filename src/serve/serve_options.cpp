@@ -328,6 +328,8 @@ std::string serve_usage_text(const char* argv0) {
            "NETWORK & LIMITS\n"
            "  --host H                      listen address (default 127.0.0.1)\n"
            "  --port N                      listen port (default 8080)\n"
+           "  --stats-port N                also serve /health, /stats, /v1/load and /metrics\n"
+           "                                on port N with a worker of their own (default off)\n"
            "  --api-key KEY                 require this bearer or x-api-key value (default:\n"
            "                                none)\n"
            "  --cors                        send permissive CORS headers for browser clients\n"
@@ -460,6 +462,8 @@ ServeOptions parse_serve_options(int argc, char** argv) {
             options.host = require_value("--host");
         } else if (arg == "--port") {
             options.port = parse_nonnegative_int(require_value("--port"), "port");
+        } else if (arg == "--stats-port") {
+            options.stats_port = parse_nonnegative_int(require_value("--stats-port"), "stats-port");
         } else if (arg == "--api-key") {
             options.api_key = require_value("--api-key");
         } else if (arg == "--model-id") {
@@ -1013,6 +1017,10 @@ ServeOptions parse_serve_options(int argc, char** argv) {
     }
     if (options.port <= 0 || options.port > 65535) {
         throw std::invalid_argument("--port must be in [1,65535]");
+    }
+    if (options.stats_port != 0 &&
+        (options.stats_port > 65535 || options.stats_port == options.port)) {
+        throw std::invalid_argument("--stats-port must be in [1,65535] and differ from --port");
     }
     if (options.max_context == 0) { throw std::invalid_argument("--max-context must be positive"); }
     if (options.kv_capacity.mode == KvCapacityMode::Explicit &&
