@@ -65,9 +65,13 @@ ServerLogEnvironment query_server_log_environment(int device);
 // blocks. Every line carries server_instance_id because request ids restart at one per process.
 class JsonlRequestLog {
 public:
+    // max_bytes = 0 keeps one unbounded file. Otherwise the active file is renamed to <path>.1
+    // once it reaches max_bytes, older copies shift up to <path>.<keep> (the oldest is dropped),
+    // and a fresh file starts with the server_start record so every file is self-describing.
     explicit JsonlRequestLog(const std::string& path,
                              const std::string& protected_artifact_path = {},
-                             std::shared_ptr<spdlog::logger> logger     = {});
+                             std::shared_ptr<spdlog::logger> logger     = {},
+                             std::uint64_t max_bytes = 0, std::uint32_t keep = 4);
 
     JsonlRequestLog(const JsonlRequestLog&)            = delete;
     JsonlRequestLog& operator=(const JsonlRequestLog&) = delete;
@@ -91,13 +95,19 @@ public:
 
 private:
     void append(std::string record);
+    // Caller holds mutex_.
+    void rotate_locked();
 
     std::string path_;
     std::string server_instance_id_;
     std::ofstream output_;
     std::mutex mutex_;
     std::shared_ptr<spdlog::logger> logger_;
-    bool failed_ = false;
+    bool failed_                 = false;
+    std::uint64_t max_bytes_     = 0;
+    std::uint32_t keep_          = 4;
+    std::uint64_t written_bytes_ = 0;
+    std::string server_start_record_;
 };
 
 } // namespace ninfer::serve

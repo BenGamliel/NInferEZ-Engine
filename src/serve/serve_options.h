@@ -29,6 +29,10 @@ struct ServeOptions {
     std::string api_key;                          // empty => no auth
     std::optional<std::string> model_id_override; // unset => artifact metadata.name
     std::string request_log_jsonl;                // empty => structured request logging disabled
+    // --request-log-max-mib: rotate the request log at this size (0 keeps one unbounded file),
+    // keeping --request-log-keep rotated copies.
+    std::uint32_t request_log_max_mib  = 0;
+    std::uint32_t request_log_keep     = 4;
     std::uint32_t max_context          = 8192;
     KvCapacityPolicy kv_capacity       = KvCapacityPolicy::explicit_capacity(8192);
     std::optional<std::size_t> kv_headroom_mib;

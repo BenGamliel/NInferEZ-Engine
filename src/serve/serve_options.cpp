@@ -346,6 +346,9 @@ std::string serve_usage_text(const char* argv0) {
            "\n"
            "LOGGING\n"
            "  --request-log-jsonl FILE      append full-precision server and request records\n"
+           "  --request-log-max-mib N       rotate the request log at N MiB (default 0: one\n"
+           "                                unbounded file)\n"
+           "  --request-log-keep N          rotated request logs kept (default 4)\n"
            "  --log-stats-interval-ms N     throughput report interval (default 5000; 0\n"
            "                                disables)\n"
            "  --log-level L                 trace, debug, info (default), warning, error,\n"
@@ -693,6 +696,12 @@ ServeOptions parse_serve_options(int argc, char** argv) {
             if (options.request_log_jsonl.empty()) {
                 throw std::invalid_argument("--request-log-jsonl must not be empty");
             }
+        } else if (arg == "--request-log-max-mib") {
+            options.request_log_max_mib = static_cast<std::uint32_t>(parse_nonnegative_int(
+                require_value("--request-log-max-mib"), "request-log-max-mib"));
+        } else if (arg == "--request-log-keep") {
+            options.request_log_keep = static_cast<std::uint32_t>(
+                parse_nonnegative_int(require_value("--request-log-keep"), "request-log-keep"));
         } else if (arg == "--response-store-max-records") {
             const int records = parse_nonnegative_int(require_value("--response-store-max-records"),
                                                       "response-store-max-records");
@@ -981,6 +990,9 @@ ServeOptions parse_serve_options(int argc, char** argv) {
     }
     if (!options.stage_layers.empty() && options.devices.size() < 2) {
         throw std::invalid_argument("--stage-layers needs --devices naming more than one device");
+    }
+    if (options.request_log_max_mib != 0 && options.request_log_jsonl.empty()) {
+        throw std::invalid_argument("--request-log-max-mib requires --request-log-jsonl");
     }
     if (host_cache_budget_explicit) {
         // The budget is the one host RAM ceiling; the two component flags would silently

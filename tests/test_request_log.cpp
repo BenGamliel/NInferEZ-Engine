@@ -781,6 +781,42 @@ int main() {
     input.close();
     std::filesystem::remove(log_path);
 
+    // Size-based rotation: every record crosses a one-byte limit, so each write rotates. The
+    // newest rotated copy is <path>.1, only `keep` copies survive, and a fresh file starts with the
+    // server_start record.
+    const std::string rotated_path = log_path.string() + ".rotating";
+    const auto remove_rotated      = [&] {
+        for (const char* suffix : {"", ".1", ".2", ".3"}) {
+            std::filesystem::remove(rotated_path + suffix);
+        }
+    };
+    const auto lines_of = [](const std::string& path) {
+        std::vector<Json> records;
+        std::ifstream file(path);
+        for (std::string line; std::getline(file, line);) {
+            if (!line.empty()) { records.push_back(Json::parse(line)); }
+        }
+        return records;
+    };
+    remove_rotated();
+    {
+        JsonlRequestLog writer(rotated_path, {}, {}, 1, 2);
+        writer.write_server_start(options, engine_options, sampling_defaults, "deployment-alias",
+                                  load, memory);
+        writer.write_request_start(context);
+        writer.write_request_error(context, "generation failed");
+    }
+    const std::vector<Json> active = lines_of(rotated_path);
+    const std::vector<Json> first  = lines_of(rotated_path + ".1");
+    const std::vector<Json> second = lines_of(rotated_path + ".2");
+    failures += check(!std::filesystem::exists(rotated_path + ".3") && active.size() == 1 &&
+                          active[0].at("event") == "server_start" && first.size() == 2 &&
+                          first[0].at("event") == "server_start" &&
+                          first[1].at("event") == "request_error" && second.size() == 2 &&
+                          second[1].at("event") == "request_start",
+                      "request log rotation did not keep the newest copies with server_start");
+    remove_rotated();
+
     if (failures == 0) { std::cout << "ok\n"; }
     return failures == 0 ? 0 : 1;
 }

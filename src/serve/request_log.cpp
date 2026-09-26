@@ -1162,8 +1162,9 @@ ServerLogEnvironment query_server_log_environment(int device) {
 
 JsonlRequestLog::JsonlRequestLog(const std::string& path,
                                  const std::string& protected_artifact_path,
-                                 std::shared_ptr<spdlog::logger> logger)
-    : path_(path), logger_(std::move(logger)) {
+                                 std::shared_ptr<spdlog::logger> logger, std::uint64_t max_bytes,
+                                 std::uint32_t keep)
+    : path_(path), logger_(std::move(logger)), max_bytes_(max_bytes), keep_(keep) {
     if (path_.empty()) { return; }
     if (!protected_artifact_path.empty() &&
         normalized_absolute_path(path_) == normalized_absolute_path(protected_artifact_path)) {
@@ -1174,6 +1175,9 @@ JsonlRequestLog::JsonlRequestLog(const std::string& path,
     if (!output_) {
         throw std::runtime_error("failed to open request JSONL log for append: " + path_);
     }
+    std::error_code size_error;
+    const std::uintmax_t existing = std::filesystem::file_size(path_, size_error);
+    written_bytes_                = size_error ? 0 : static_cast<std::uint64_t>(existing);
 }
 
 void JsonlRequestLog::write_server_start(const ServeOptions& options,
@@ -1187,9 +1191,14 @@ void JsonlRequestLog::write_server_start(const ServeOptions& options,
     const std::uintmax_t size = std::filesystem::file_size(options.artifact_path, error);
     const std::optional<std::uint64_t> artifact_size =
         error ? std::nullopt : std::optional<std::uint64_t>(size);
-    append(format_server_start_json(server_instance_id_, unix_time_ms(), options, engine_options,
-                                    sampling_defaults, public_model_id, load, memory,
-                                    query_server_log_environment(options.device), artifact_size));
+    std::string record = format_server_start_json(
+        server_instance_id_, unix_time_ms(), options, engine_options, sampling_defaults,
+        public_model_id, load, memory, query_server_log_environment(options.device), artifact_size);
+    if (max_bytes_ != 0) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        server_start_record_ = record;
+    }
+    append(std::move(record));
 }
 
 void JsonlRequestLog::write_request_start(const RequestLogContext& context) {
@@ -1229,11 +1238,49 @@ void JsonlRequestLog::append(std::string record) {
         if (!output_) {
             failed_        = true;
             report_failure = true;
+        } else {
+            written_bytes_ += record.size() + 1U;
+            if (max_bytes_ != 0 && written_bytes_ >= max_bytes_) {
+                rotate_locked();
+                report_failure = failed_;
+            }
         }
     }
     if (report_failure && logger_ != nullptr) {
         logger_->error("request log disabled | write failed | {}",
                        product::format_pretty_text(path_));
+    }
+}
+
+// Renames rather than truncates, so no record written before the rotation is lost.
+void JsonlRequestLog::rotate_locked() {
+    output_.close();
+    std::error_code error;
+    if (keep_ == 0) {
+        std::filesystem::remove(path_, error);
+    } else {
+        for (std::uint32_t index = keep_ - 1U; index >= 1U; --index) {
+            const std::string source      = path_ + "." + std::to_string(index);
+            const std::string destination = path_ + "." + std::to_string(index + 1U);
+            if (std::filesystem::exists(source, error)) {
+                std::filesystem::remove(destination, error);
+                std::filesystem::rename(source, destination, error);
+            }
+        }
+        std::filesystem::remove(path_ + ".1", error);
+        std::filesystem::rename(path_, path_ + ".1", error);
+    }
+    output_.open(path_, std::ios::out | std::ios::trunc);
+    written_bytes_ = 0;
+    if (!output_) {
+        failed_ = true;
+        return;
+    }
+    if (!server_start_record_.empty()) {
+        output_ << server_start_record_ << '\n';
+        output_.flush();
+        written_bytes_ = server_start_record_.size() + 1U;
+        if (!output_) { failed_ = true; }
     }
 }
 

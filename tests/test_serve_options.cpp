@@ -968,6 +968,8 @@ int main() {
                                         "--recover-invariant-failures",
                                         "--release-diverged-checkpoints",
                                         "--request-log-jsonl",
+                                        "--request-log-keep",
+                                        "--request-log-max-mib",
                                         "--response-store-max-mib",
                                         "--response-store-max-records",
                                         "--rope-yarn",
@@ -1061,6 +1063,19 @@ int main() {
                                        "requests.jsonl", "--api-key", "do-not-log"});
     failures += check(logged.request_log_jsonl == "requests.jsonl",
                       "--request-log-jsonl did not preserve its path");
+    failures += check(logged.request_log_max_mib == 0 && logged.request_log_keep == 4,
+                      "request log rotation was not off by default");
+    const ServeOptions rotated =
+        parse({"ninfer-serve", "model.ninfer", "--request-log-jsonl", "requests.jsonl",
+               "--request-log-max-mib", "64", "--request-log-keep", "2"});
+    failures += check(rotated.request_log_max_mib == 64 && rotated.request_log_keep == 2,
+                      "request log rotation options did not reach serving options");
+    bool rotation_without_log_rejected = false;
+    try {
+        (void)parse({"ninfer-serve", "model.ninfer", "--request-log-max-mib", "64"});
+    } catch (const std::invalid_argument&) { rotation_without_log_rejected = true; }
+    failures += check(rotation_without_log_rejected,
+                      "--request-log-max-mib was accepted without a request log");
     failures +=
         check(serve_usage_text("ninfer-serve").find("--request-log-jsonl") != std::string::npos,
               "serve help omits --request-log-jsonl");

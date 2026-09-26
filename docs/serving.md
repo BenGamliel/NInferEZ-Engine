@@ -1161,6 +1161,8 @@ The table lists executable defaults. The startup example selects a long-context 
 | `--media-live-mib N` | all live prepared BF16 media payloads | `2048` |
 | `--media-preprocess-threads N` | bounded media preprocessing workers; `0` selects at most 16 from host concurrency | `0` |
 | `--request-log-jsonl FILE` | append full-precision server/request records | disabled |
+| `--request-log-max-mib N` | rotate the request log once it reaches N MiB: the file is renamed to `FILE.1`, older copies move up to `FILE.<keep>` and the oldest is dropped, and the new file starts with the `server_start` record; requires `--request-log-jsonl` | `0` (one unbounded file) |
+| `--request-log-keep N` | rotated request logs kept; `0` keeps none | `4` |
 | `--response-store-max-records N` | maximum locally retained Responses objects | `1024` |
 | `--response-store-max-mib N` | total local Response envelope/Item/context budget | `256` |
 | `--kv-dtype bf16\|int8\|fp8\|rk8v4\|rk4v4\|rk4v4-e8\|nvfp4\|k8v4` | KV-cache storage. `rk8v4` is opt-in RotorQuant, `rk4v4` opt-in Lloyd-Max 4-bit keys and `rk4v4-e8` opt-in E8-lattice INT4 keys; all eight are accepted on this fork's sm_86/sm_89 targets | `bf16` |
