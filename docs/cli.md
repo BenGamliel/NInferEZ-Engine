@@ -263,6 +263,7 @@ The table lists executable defaults. The examples above select FP8 KV and MTP3.
 | `--presence-penalty F` | presence-penalty override | registered model/mode default |
 | `--frequency-penalty F` | frequency-penalty override | registered model/mode default (`0`) |
 | `--seed N` | sampling seed | `0` |
+| `--log-colours on\|off` | `on` gives every statistic of the stderr summary a stable colour, even when stderr is redirected | off |
 
 When a sampling flag is omitted, Engine selects the general-task preset for the loaded architecture
 and rendered prompt mode. The current official models use:

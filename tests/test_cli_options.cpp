@@ -191,6 +191,7 @@ int run_tests() {
                                         "--lm-head-draft",
                                         "--lm-head-q4",
                                         "--lm-head-q6",
+                                        "--log-colours",
                                         "--log-level",
                                         "--lookup-ngram",
                                         "--max-context",
@@ -264,6 +265,8 @@ int run_tests() {
                       "CLI log level was not parsed");
     failures += check(help.find("--log-level") != std::string::npos,
                       "CLI help omits the log-level control");
+    failures += check(help.find("--log-colours") != std::string::npos,
+                      "CLI help omits the log-colours control");
     failures += check(rejects([] {
                           (void)parse({"ninfer-cli", "model.ninfer", "--prompt", "hello",
                                        "--log-level", "verbose"});

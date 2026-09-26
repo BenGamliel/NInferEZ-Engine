@@ -1131,6 +1131,7 @@ The table lists executable defaults. The startup example selects a long-context 
 | `--prefill-chunk N` | text-prefill chunk | `1024` |
 | `--fast-prefill-kernel` | prefill an `int8` KV cache with the fast prompt-attention kernel (FP16 PV accumulation per 64-key tile) and round `--prefill-chunk` down to whole attention waves; a small perplexity cost (see [perplexity](perplexity.md)) | off |
 | `--log-stats-interval-ms N` | aggregate throughput report interval; `0` disables it | `5000` |
+| `--log-colours on\|off` | `on` colours the console log's levels and gives every statistic of the operational lines a stable colour; `off` keeps the log plain; a redirected stderr is always plain | levels coloured on a console |
 | `--device N` | CUDA device index | `0` |
 | `--devices A,B,...` | one pipeline stage per listed CUDA device (2 to 8, Linux; see the [README](../README.md#several-gpus-pipeline-stages---devices-ab)); overrides `--device` | none |
 | `--stage-layers A,B,...` | layers per stage, in `--devices` order; omitted means a split chosen from each device's free memory | memory-balanced |

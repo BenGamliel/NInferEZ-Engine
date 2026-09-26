@@ -96,6 +96,9 @@ struct ServeOptions {
     std::string thinking_budget_message;
     int default_max_tokens = kDefaultMaxTokens;
     bool enable_cors       = false; // send permissive CORS headers for browser UIs
+    // --log-colours on|off: on colours the console log's levels and statistics, off keeps it plain;
+    // unset colours the levels on a console only.
+    std::optional<bool> log_colours;
     bool enable_webui      = true;  // serve a WebUI compiled in with NINFER_WEBUI_DIR
     // --webui-mcp-proxy: relay the WebUI's MCP traffic at /cors-proxy. It reaches any http host it
     // is given and carries no API key, so it stays off unless asked for by name.

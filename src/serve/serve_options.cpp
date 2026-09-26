@@ -312,6 +312,8 @@ std::string serve_usage_text(const char* argv0) {
            "                                disables)\n"
            "  --log-level L                 trace, debug, info (default), warning, error,\n"
            "                                critical or off\n"
+           "  --log-colours on|off          colour the console log's levels and statistics\n"
+           "                                (default: levels on a console, statistics off)\n"
            "\n"
            "NOTES\n"
            "  Sampler defaults come from the loaded model and the resolved thinking mode;\n"
@@ -460,6 +462,15 @@ ServeOptions parse_serve_options(int argc, char** argv) {
         } else if (arg == "--log-stats-interval-ms") {
             options.log_stats_interval_ms = static_cast<std::uint32_t>(parse_nonnegative_int(
                 require_value("--log-stats-interval-ms"), "log-stats-interval-ms"));
+        } else if (arg == "--log-colours") {
+            const std::string_view value = require_value("--log-colours");
+            if (value == "on") {
+                options.log_colours = true;
+            } else if (value == "off") {
+                options.log_colours = false;
+            } else {
+                throw std::invalid_argument("--log-colours accepts on or off");
+            }
         } else if (arg == "--max-request-mib") {
             const std::uint64_t mib =
                 parse_u64(require_value("--max-request-mib"), "max-request-mib");

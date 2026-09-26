@@ -738,6 +738,7 @@ int main() {
                                         "--lm-head-draft",
                                         "--lm-head-q4",
                                         "--lm-head-q6",
+                                        "--log-colours",
                                         "--log-level",
                                         "--log-stats-interval-ms",
                                         "--long-anchor-spacing",
@@ -977,6 +978,17 @@ int main() {
                               !parse({"ninfer-serve", "model.ninfer"})
                                    .context_cache.thorough_admission_search,
                           "--thorough-admission-search was not an off-by-default switch");
+        failures += check(!parse({"ninfer-serve", "model.ninfer"}).log_colours &&
+                              parse({"ninfer-serve", "model.ninfer", "--log-colours", "on"})
+                                      .log_colours == true &&
+                              parse({"ninfer-serve", "model.ninfer", "--log-colours", "off"})
+                                      .log_colours == false,
+                          "--log-colours was not an unset-by-default on|off switch");
+        bool bad_colours_rejected = false;
+        try {
+            (void)parse({"ninfer-serve", "model.ninfer", "--log-colours", "auto"});
+        } catch (const std::invalid_argument&) { bad_colours_rejected = true; }
+        failures += check(bad_colours_rejected, "--log-colours accepted a value other than on|off");
         const ServeOptions automatic_anchors =
             parse({"ninfer-serve", "model.ninfer", "--auto-long-anchors", "--long-anchor-spacing",
                    "4096"});
