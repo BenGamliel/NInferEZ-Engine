@@ -394,6 +394,8 @@ WorkspacePlan build_workspace_plan(const SequencePlanImpl& plan) {
                 if (const auto* attention =
                         std::get_if<execution::AttentionParameters>(&block.mixer)) {
                     (void)workspace::text_attention_projection(layout, config, last);
+                    (void)workspace::matrix(layout, DType::BF16, dimension(config.hidden_size),
+                                            last);
                     scratch(layout, execution::attention_projection_workspace_bytes(*attention,
                                                                                     first, last));
                     (void)workspace::text_attention_results(layout, config, last);

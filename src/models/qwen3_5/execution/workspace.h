@@ -55,8 +55,10 @@ Tensor visual_scatter_indices(Allocator& allocator, std::int32_t tokens) {
     return vector(allocator, DType::I32, tokens);
 }
 
+// The normalized hidden state is not among the roots: the fused norm and projection never
+// stage it, so the unfused routes carve it after these, and startup sizing adds it as the
+// worst case.
 struct TextAttentionProjectionRoots {
-    Tensor hidden;
     Tensor query;
     Tensor gate;
     Tensor key;
@@ -67,7 +69,6 @@ template <class Allocator>
 TextAttentionProjectionRoots
 text_attention_projection(Allocator& allocator, const TextConfig& config, std::int32_t tokens) {
     return {
-        matrix(allocator, DType::BF16, dimension(config.hidden_size), tokens),
         matrix(allocator, DType::BF16, dimension(config.attention->query_width()), tokens),
         matrix(allocator, DType::BF16, dimension(config.attention->query_width()), tokens),
         matrix(allocator, DType::BF16, dimension(config.attention->key_width()), tokens),
