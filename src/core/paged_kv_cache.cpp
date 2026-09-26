@@ -5,6 +5,7 @@
 #include "ninfer/types.h"
 
 #include <algorithm>
+#include <exception>
 #include <limits>
 #include <new>
 #include <stdexcept>
