@@ -25,24 +25,32 @@ struct PlanningAllowance {
     std::uint32_t affected_requests       = 1;
     const std::atomic<bool>* cancellation = nullptr;
     std::uint64_t control_deadline_ns     = std::numeric_limits<std::uint64_t>::max();
-    // The base search grant scales with the value at stake instead of a flat 5 ms.
-    bool value_scaled_grant = false;
+    // A thorough search scales its base grant with the value at stake instead of a flat 5 ms,
+    // gives every eligible node its own bounded discovery grant, and prices each request's gain
+    // alone instead of sharing it across the runnable requests.
+    bool thorough = false;
 
     static constexpr std::uint64_t kThoroughBoundaryNs = 250'000'000;
 
     // A thorough boundary gets the full 250 ms even while other requests run: admission happens
     // once per request, and a search stopped early can miss a reusable prefix worth tens of
-    // seconds of re-prefill to save the running decode one pause of at most this allowance. The
-    // runnable requests still share the economic bound through `affected_requests`.
+    // seconds of re-prefill to save the running decode one pause of at most this allowance.
     [[nodiscard]] static PlanningAllowance boundary(std::uint32_t other_runnable,
                                                     std::uint64_t now = planning_now_ns(),
                                                     bool thorough     = false) noexcept {
-        return {.started_ns         = now,
-                .limit_ns           = thorough            ? kThoroughBoundaryNs
-                                      : other_runnable == 0 ? 50'000'000ULL
-                                                            : 10'000'000ULL,
-                .affected_requests  = 1U + other_runnable,
-                .value_scaled_grant = thorough};
+        return {.started_ns        = now,
+                .limit_ns          = thorough              ? kThoroughBoundaryNs
+                                     : other_runnable == 0 ? 50'000'000ULL
+                                                           : 10'000'000ULL,
+                .affected_requests = 1U + other_runnable,
+                .thorough          = thorough};
+    }
+
+    // The gain is the re-prefill one request avoids. By default the runnable requests share its
+    // economic bound; a thorough boundary does not divide it, since queued re-prefills cost more
+    // under load and the time limit already bounds the pause the others see.
+    [[nodiscard]] std::uint32_t economic_sharing() const noexcept {
+        return thorough ? 1U : std::max(1U, affected_requests);
     }
 
     [[nodiscard]] std::uint64_t remaining(std::uint64_t now) const noexcept {
@@ -62,9 +70,8 @@ public:
     MaterializationSearchBudget(PlanningAllowance allowance, std::uint64_t started,
                                 std::uint64_t initial_cost) noexcept
         : allowance_(allowance), started_(started),
-          granted_(std::min(allowance.value_scaled_grant
-                                ? value_scaled_grant(initial_cost)
-                                : std::min(kMinimumGrantNs, economic(initial_cost)),
+          granted_(std::min(allowance.thorough ? value_scaled_grant(initial_cost)
+                                               : std::min(kMinimumGrantNs, economic(initial_cost)),
                             allowance.remaining(started))) {}
 
     [[nodiscard]] bool allow(std::uint64_t now, std::uint64_t next_operation_ns,
@@ -86,8 +93,10 @@ public:
             reason_ = MaterializationStopReason::InsufficientExpectedGain;
             return false;
         }
-        // Unknown forecasts get one bounded discovery episode, not a fresh grant for every node.
-        if (!complete_prediction && (!discovery_eligible || discovery_used_)) {
+        // Unknown forecasts get one bounded discovery episode, not a fresh grant for every node,
+        // unless the search is thorough.
+        if (!complete_prediction &&
+            (!discovery_eligible || (discovery_used_ && !allowance_.thorough))) {
             reason_ = MaterializationStopReason::InsufficientExpectedGain;
             return false;
         }
@@ -140,7 +149,7 @@ private:
 
     [[nodiscard]] std::uint64_t economic(std::uint64_t gain) const noexcept {
         if (gain == std::numeric_limits<std::uint64_t>::max()) { return 0; }
-        return gain / kCostDivisor / std::max(1U, allowance_.affected_requests);
+        return gain / kCostDivisor / allowance_.economic_sharing();
     }
 
     bool boundary_limited_ = false;

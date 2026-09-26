@@ -84,6 +84,26 @@ int main() {
         require(renew.allow(20 * ms, 2 * ms, 3 * ms, 70'000 * ms, true, 1) &&
                     renew.granted_ns() == 40 * ms && renew.renewals() == 1,
                 "a valuable completion could not extend past the scaled grant");
+        // A thorough search gives every eligible node its own bounded discovery grant, still
+        // refuses an ineligible one, and prices a request's gain without sharing it across the
+        // runnable requests.
+        MaterializationSearchBudget thorough_discovery(thorough, 0, 400 * ms);
+        require(thorough_discovery.allow(20 * ms, ms, ms, 70'000 * ms, false, 1) &&
+                    thorough_discovery.granted_ns() == 25 * ms,
+                "a thorough search did not grant bounded discovery");
+        require(thorough_discovery.allow(25 * ms, ms, ms, 70'000 * ms, false, 2) &&
+                    thorough_discovery.granted_ns() == 30 * ms,
+                "a thorough search granted discovery to only one node");
+        require(!thorough_discovery.allow(30 * ms, ms, ms, 70'000 * ms, false, 3, false),
+                "a thorough search granted discovery to an ineligible node");
+        require(busy.economic_sharing() == 3 && thorough_busy.economic_sharing() == 1,
+                "the economic bound was shared under the wrong boundary");
+        MaterializationSearchBudget shared_gain(busy, 0, 400 * ms);
+        require(!shared_gain.allow(5 * ms, ms, 2 * ms, 60 * ms, true, 1),
+                "a default busy search did not share the gain across runnable requests");
+        MaterializationSearchBudget own_gain(thorough_busy, 0, 400 * ms);
+        require(own_gain.allow(20 * ms, ms, 2 * ms, 60 * ms, true, 1),
+                "a thorough busy search shared one request's gain across the runnable requests");
         std::atomic<bool> cancelled{false};
         auto controlled                = PlanningAllowance::boundary(0, 0);
         controlled.cancellation        = &cancelled;

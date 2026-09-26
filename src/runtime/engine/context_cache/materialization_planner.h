@@ -204,7 +204,7 @@ public:
             // request so cheap that the economic cap on search time rounds to zero.
             const bool time_exhausted = allowance.remaining(planning_now_ns<Clock>()) == 0;
             const bool no_economic_allowance =
-                identity_best->cost.total_ns / 20U / std::max(1U, allowance.affected_requests) == 0;
+                identity_best->cost.total_ns / 20U / allowance.economic_sharing() == 0;
             if (!needs_optional_search || time_exhausted || no_economic_allowance) {
                 const CandidateInput& selected = candidates[identity_best->candidate_index];
                 const auto price_split         = [&](std::span<const std::uint32_t> frontiers) {
@@ -800,11 +800,13 @@ public:
                                 ? incumbent.cost.total_ns - chosen.estimated_total_ns
                                 : 0;
                         search_phase = MaterializationSearchPhase::Assessment;
-                        if (!allow_work(assessment_step_ns, assessment_step_ns,
-                                        chosen.recovery_complete ? target_gain : gain,
-                                        chosen.recovery_complete &&
-                                            chosen.unsatisfied_constraints == 0,
-                                        !candidate_seeded[path.candidate_index])) {
+                        // A thorough search confirms an option it already generated even for a
+                        // seeded candidate, so a demote is not generated and left unassessed.
+                        if (!allow_work(
+                                assessment_step_ns, assessment_step_ns,
+                                chosen.recovery_complete ? target_gain : gain,
+                                chosen.recovery_complete && chosen.unsatisfied_constraints == 0,
+                                allowance.thorough || !candidate_seeded[path.candidate_index])) {
                             search_stopped = search_work >= work_limit ||
                                              allowance.remaining(planning_now_ns<Clock>()) == 0;
                             path.cursor.reset();
@@ -859,8 +861,9 @@ public:
                             assess_pending && pending_.front().guidance.recovery_complete &&
                                 pending_.front().guidance.unsatisfied_constraints == 0 &&
                                 pending_.front().guidance.logical_ready,
-                            !candidate_seeded[assess_pending ? pending_.front().candidate_index
-                                                             : queue_.front().candidate_index])) {
+                            assess_pending ? allowance.thorough ||
+                                                 !candidate_seeded[pending_.front().candidate_index]
+                                           : !candidate_seeded[queue_.front().candidate_index])) {
                 if (search_work >= work_limit ||
                     allowance.remaining(planning_now_ns<Clock>()) == 0) {
                     break;
