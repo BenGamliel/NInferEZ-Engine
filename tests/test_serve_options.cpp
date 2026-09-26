@@ -116,7 +116,7 @@ int main() {
                           mtp_ngram.speculative.ngram_draft_tokens == 15,
                       "MTP and ngram widths were not kept separate");
     for (const std::string backend : {"mtp", "dflash", "dflash2"}) {
-        const int neural_limit = backend == "mtp" ? 5 : 15;
+        const int neural_limit = 15;
         for (int neural = 1; neural <= neural_limit; ++neural) {
             for (int lookup = 1; lookup <= 63; ++lookup) {
                 const auto options =
