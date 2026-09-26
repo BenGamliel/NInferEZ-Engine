@@ -53,6 +53,12 @@ void launch_nvfp4_attn_input_fused_rmsnorm_quantize(const Tensor&, const Tensor&
     reject_nvfp4_a4();
 }
 
+void launch_nvfp4_attn_input_fused_rmsnorm_quantize_rowmajor(const Tensor&, const Tensor&, float,
+                                                             float, Nvfp4W4a4Workspace,
+                                                             cudaStream_t) {
+    reject_nvfp4_a4();
+}
+
 void nvfp4_attn_input_fused_rmsnorm_launch(const Tensor&, const Tensor&, float, const Weight&,
                                            Tensor&, Tensor&, Tensor&, Tensor&, WorkspaceArena&,
                                            cudaStream_t) {

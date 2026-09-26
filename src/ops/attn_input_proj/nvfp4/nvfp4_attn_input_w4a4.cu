@@ -80,6 +80,26 @@ void launch_gemm(const Weight& weight, Tensor& q, Tensor& gate, Tensor& k, Tenso
 
 } // namespace
 
+void launch_nvfp4_w4a4_mma_banded(const Weight& weight, Tensor& q, Tensor& gate, Tensor& k,
+                                  Tensor& v, Nvfp4W4a4Workspace workspace, std::int32_t tokens,
+                                  cudaStream_t stream) {
+    if (tokens <= 64) {
+        launch_gemm<M32N64>(weight, q, gate, k, v, workspace, tokens, stream);
+    } else if (tokens <= 96) {
+        launch_gemm<M32N128>(weight, q, gate, k, v, workspace, tokens, stream);
+    } else if (tokens <= 128) {
+        launch_gemm<M128N128Pipelined>(weight, q, gate, k, v, workspace, tokens, stream);
+    } else if (tokens <= 192) {
+        launch_gemm<M64N128>(weight, q, gate, k, v, workspace, tokens, stream);
+    } else if (tokens <= 384) {
+        launch_gemm<M128N128Resident>(weight, q, gate, k, v, workspace, tokens, stream);
+    } else if (tokens <= 512) {
+        launch_gemm<M128N128Pipelined>(weight, q, gate, k, v, workspace, tokens, stream);
+    } else {
+        launch_gemm<M128N128Resident>(weight, q, gate, k, v, workspace, tokens, stream);
+    }
+}
+
 void nvfp4_attn_input_w4a4_launch(const Tensor& x, const Weight& weight, Tensor& q, Tensor& gate,
                                   Tensor& k, Tensor& v, Nvfp4W4a4Workspace workspace,
                                   cudaStream_t stream) {
@@ -95,20 +115,8 @@ void nvfp4_attn_input_w4a4_launch(const Tensor& x, const Weight& weight, Tensor&
             static_cast<const std::uint8_t*>(weight.scales), static_cast<__nv_bfloat16*>(q.data),
             static_cast<__nv_bfloat16*>(gate.data), static_cast<__nv_bfloat16*>(k.data),
             static_cast<__nv_bfloat16*>(v.data), tokens, alpha, stream);
-    } else if (tokens <= 64) {
-        launch_gemm<M32N64>(weight, q, gate, k, v, workspace, tokens, stream);
-    } else if (tokens <= 96) {
-        launch_gemm<M32N128>(weight, q, gate, k, v, workspace, tokens, stream);
-    } else if (tokens <= 128) {
-        launch_gemm<M128N128Pipelined>(weight, q, gate, k, v, workspace, tokens, stream);
-    } else if (tokens <= 192) {
-        launch_gemm<M64N128>(weight, q, gate, k, v, workspace, tokens, stream);
-    } else if (tokens <= 384) {
-        launch_gemm<M128N128Resident>(weight, q, gate, k, v, workspace, tokens, stream);
-    } else if (tokens <= 512) {
-        launch_gemm<M128N128Pipelined>(weight, q, gate, k, v, workspace, tokens, stream);
     } else {
-        launch_gemm<M128N128Resident>(weight, q, gate, k, v, workspace, tokens, stream);
+        launch_nvfp4_w4a4_mma_banded(weight, q, gate, k, v, workspace, tokens, stream);
     }
 }
 

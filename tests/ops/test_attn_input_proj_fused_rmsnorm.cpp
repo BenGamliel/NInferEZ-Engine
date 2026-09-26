@@ -8,11 +8,13 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
 #include <iostream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -56,26 +58,45 @@ int run_case(const Weight& weight, int tokens, bool measure) {
 
     const std::size_t capacity = ops::attn_input_proj_workspace_capacity_bytes(
         QType::NVFP4, kParentRows, kHidden, ops::LinearPolicy::AllowA4, tokens, tokens);
-    DeviceArena reference_workspace(capacity);
-    DeviceArena fused_workspace(capacity);
+    // The A16 route (T<4) uses no workspace; the one-byte floor keeps the arena
+    // constructible while still rejecting any genuine plane allocation.
+    const std::size_t floored = capacity == 0 ? 1 : capacity;
+    DeviceArena reference_workspace(floored);
+    DeviceArena fused_workspace(floored);
     int failures = 0;
     {
         auto reference_scope = reference_workspace.scope();
         auto fused_scope     = fused_workspace.scope();
-        const auto reference_planes =
-            ops::detail::allocate_nvfp4_w4a4_workspace(reference_workspace, tokens, kHidden);
-        const auto fused_planes =
-            ops::detail::allocate_nvfp4_w4a4_workspace(fused_workspace, tokens, kHidden);
-        ops::detail::launch_nvfp4_w4a4_quantize(hidden, weight, reference_planes,
-                                                ops::detail::Nvfp4ScaleLayout::Tiled, nullptr);
-        ops::detail::launch_nvfp4_attn_input_fused_rmsnorm_quantize(
-            residual, gain, kEps, weight.input_scale_divisor, fused_planes, nullptr);
-        cuda_synchronize();
-        const std::string suffix = " T=" + std::to_string(tokens);
-        failures += compare_bytes("codes" + suffix, reference_planes.codes, fused_planes.codes,
-                                  static_cast<std::size_t>(tokens) * kHidden / 2);
-        failures += compare_bytes("scales" + suffix, reference_planes.scales, fused_planes.scales,
-                                  reference_planes.scale_bytes);
+        // Below T=4 the route carries BF16 activations (no quantizer); at T>=4 the W4A4
+        // route quantizes, tiled at/above the TMA cutoff and row-major below it.
+        if (tokens >= 4) {
+            const bool tiled = ops::detail::nvfp4_attn_input_tma_route(tokens);
+            const auto reference_planes =
+                ops::detail::allocate_nvfp4_w4a4_workspace(reference_workspace, tokens, kHidden);
+            const auto fused_planes =
+                ops::detail::allocate_nvfp4_w4a4_workspace(fused_workspace, tokens, kHidden);
+            ops::detail::launch_nvfp4_w4a4_quantize(hidden, weight, reference_planes,
+                                                    tiled ? ops::detail::Nvfp4ScaleLayout::Tiled
+                                                          : ops::detail::Nvfp4ScaleLayout::RowMajor,
+                                                    nullptr);
+            if (tiled) {
+                ops::detail::launch_nvfp4_attn_input_fused_rmsnorm_quantize(
+                    residual, gain, kEps, weight.input_scale_divisor, fused_planes, nullptr);
+            } else {
+                ops::detail::launch_nvfp4_attn_input_fused_rmsnorm_quantize_rowmajor(
+                    residual, gain, kEps, weight.input_scale_divisor, fused_planes, nullptr);
+            }
+            cuda_synchronize();
+            const std::string suffix = " T=" + std::to_string(tokens);
+            failures += compare_bytes("codes" + suffix, reference_planes.codes, fused_planes.codes,
+                                      static_cast<std::size_t>(tokens) * kHidden / 2);
+            // Row-major planes carry no padding; only the written prefix is defined.
+            const std::size_t scale_count = tiled
+                                                ? reference_planes.scale_bytes
+                                                : static_cast<std::size_t>(tokens) * (kHidden / 16);
+            failures += compare_bytes("scales" + suffix, reference_planes.scales,
+                                      fused_planes.scales, scale_count);
+        }
     }
 
     constexpr int kQRows  = 6144;
@@ -108,7 +129,7 @@ int run_case(const Weight& weight, int tokens, bool measure) {
                               static_cast<const std::uint8_t*>(fused_k.p), reference_k.bytes);
     failures += compare_bytes("v" + suffix, static_cast<const std::uint8_t*>(reference_v.p),
                               static_cast<const std::uint8_t*>(fused_v.p), reference_v.bytes);
-    if (tokens == 1500 && failures == 0) {
+    if ((tokens == 1 || tokens == 1500) && failures == 0) {
         DeviceContext device;
         DecodeGraphDefinition definition;
         DecodeGraphExecutable graph;
@@ -173,6 +194,54 @@ int run_case(const Weight& weight, int tokens, bool measure) {
     return failures;
 }
 
+// T==2,3 deliberately stay unfused (measured fused-norm+SIMT regression): the predicate
+// must exclude them, the fused entry must throw rather than misroute, and the unfused
+// path must run clean.
+int check_unfused_fallback(const Weight& weight, int tokens) {
+    if (ops::attn_input_proj_fused_rmsnorm_nvfp4_eligible(weight, ops::LinearPolicy::AllowA4,
+                                                          tokens)) {
+        std::cerr << "T=" << tokens << " must stay on the unfused path\n";
+        return 1;
+    }
+    const auto values            = make_bf16_activation(kHidden, tokens, 871U + tokens);
+    const auto gains             = make_bf16_activation(kHidden, 1, 119U);
+    DeviceBuffer residual_buffer = to_device(bf16_bits(values));
+    DeviceBuffer gain_buffer     = to_device(bf16_bits(gains));
+    DeviceBuffer hidden_buffer(static_cast<std::size_t>(kHidden) * tokens * 2);
+    Tensor residual(residual_buffer.p, DType::BF16, {kHidden, tokens});
+    Tensor gain(gain_buffer.p, DType::BF16, {kHidden});
+    Tensor hidden(hidden_buffer.p, DType::BF16, {kHidden, tokens});
+    constexpr int kQRows  = 6144;
+    constexpr int kKvRows = 1024;
+    DeviceBuffer fused_q(static_cast<std::size_t>(kQRows) * tokens * 2);
+    DeviceBuffer fused_gate(static_cast<std::size_t>(kQRows) * tokens * 2);
+    DeviceBuffer fused_k(static_cast<std::size_t>(kKvRows) * tokens * 2);
+    DeviceBuffer fused_v(static_cast<std::size_t>(kKvRows) * tokens * 2);
+    Tensor fq(fused_q.p, DType::BF16, {kQRows, tokens});
+    Tensor fg(fused_gate.p, DType::BF16, {kQRows, tokens});
+    Tensor fk(fused_k.p, DType::BF16, {kKvRows, tokens});
+    Tensor fv(fused_v.p, DType::BF16, {kKvRows, tokens});
+    DeviceArena workspace(1);
+    try {
+        ops::attn_input_proj_fused_rmsnorm_nvfp4(residual, gain, kEps, weight, fq, fg, fk, fv,
+                                                 ops::LinearPolicy::AllowA4, workspace, nullptr);
+    } catch (const std::invalid_argument&) {
+        ops::rmsnorm(residual, gain, kEps, true, hidden, nullptr);
+        ops::attn_input_proj(hidden, weight, fq, fg, fk, fv, ops::LinearPolicy::AllowA4, workspace,
+                             nullptr);
+        cuda_synchronize();
+        for (const double v : from_device_bf16(fused_q.p, fused_q.bytes / 2)) {
+            if (!std::isfinite(v)) {
+                std::cerr << "T=" << tokens << " unfused fallback produced non-finite output\n";
+                return 1;
+            }
+        }
+        return 0;
+    }
+    std::cerr << "T=" << tokens << " fused entry must throw\n";
+    return 1;
+}
+
 } // namespace
 
 int main() {
@@ -197,23 +266,37 @@ int main() {
         if (ops::attn_input_proj_fused_rmsnorm_nvfp4_eligible(weight, ops::LinearPolicy::A16Only,
                                                               1024) ||
             ops::attn_input_proj_fused_rmsnorm_nvfp4_eligible(weight, ops::LinearPolicy::AllowA4,
-                                                              1023) ||
-            ops::attn_input_proj_fused_rmsnorm_nvfp4_eligible(wrong_qtype, ops::LinearPolicy::AllowA4,
-                                                              1024) ||
+                                                              0) ||
+            ops::attn_input_proj_fused_rmsnorm_nvfp4_eligible(weight, ops::LinearPolicy::A16Only,
+                                                              1) ||
+            ops::attn_input_proj_fused_rmsnorm_nvfp4_eligible(wrong_qtype,
+                                                              ops::LinearPolicy::AllowA4, 1024) ||
             ops::attn_input_proj_fused_rmsnorm_nvfp4_eligible(wrong_layout,
                                                               ops::LinearPolicy::AllowA4, 1024) ||
             ops::attn_input_proj_fused_rmsnorm_nvfp4_eligible(wrong_n, ops::LinearPolicy::AllowA4,
                                                               1024) ||
             ops::attn_input_proj_fused_rmsnorm_nvfp4_eligible(wrong_k, ops::LinearPolicy::AllowA4,
                                                               1024) ||
+            ops::attn_input_proj_fused_rmsnorm_nvfp4_eligible(wrong_n, ops::LinearPolicy::AllowA4,
+                                                              1) ||
+            ops::attn_input_proj_fused_rmsnorm_nvfp4_eligible(weight, ops::LinearPolicy::AllowA4,
+                                                              2) ||
+            ops::attn_input_proj_fused_rmsnorm_nvfp4_eligible(weight, ops::LinearPolicy::AllowA4,
+                                                              3) ||
             !ops::attn_input_proj_fused_rmsnorm_nvfp4_eligible(weight, ops::LinearPolicy::AllowA4,
-                                                               1024)) {
+                                                               1024) ||
+            !ops::attn_input_proj_fused_rmsnorm_nvfp4_eligible(weight, ops::LinearPolicy::AllowA4,
+                                                               1) ||
+            !ops::attn_input_proj_fused_rmsnorm_nvfp4_eligible(weight, ops::LinearPolicy::AllowA4,
+                                                               4)) {
             std::cerr << "fused route eligibility mismatch\n";
             return 1;
         }
         int failures       = 0;
         const bool measure = std::getenv("NINFER_MEASURE_FUSED_STAGE") != nullptr;
-        for (const int tokens : {1024, 1500, 2048, 4096}) {
+        for (const int tokens : {2, 3}) { failures += check_unfused_fallback(weight, tokens); }
+        for (const int tokens : {1,   4,   5,   32,  64,  65,   96,   97,   128,  129,  192,
+                                 193, 384, 385, 512, 513, 1000, 1023, 1024, 1500, 2048, 4096}) {
             failures +=
                 run_case_allowing_arch_skip("fused rmsnorm attn_input_proj T=" +
                                                 std::to_string(tokens),

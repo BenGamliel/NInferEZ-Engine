@@ -404,9 +404,12 @@ void attn_input_proj(const Tensor& x, const Weight& query_key_gate_value_weight,
 
 bool attn_input_proj_fused_rmsnorm_nvfp4_eligible(const Weight& weight, LinearPolicy policy,
                                                   std::int32_t tokens) {
-    return policy == LinearPolicy::AllowA4 && detail::nvfp4_attn_input_tma_route(tokens) &&
-           weight.qtype == QType::NVFP4 && weight.layout == QuantLayout::BlockScaleK16M128x4 &&
-           weight.n == 14336 && weight.k == 5120;
+    // T==1 fuses the GEMV consumer, T>=4 the W4A4 consumers. T==2,3 stay unfused: a fused
+    // norm+SIMT variant measured a regression (see plan.h), so the gap is deliberate.
+    const bool supported_tokens = tokens == 1 || tokens >= 4;
+    return policy == LinearPolicy::AllowA4 && supported_tokens && weight.qtype == QType::NVFP4 &&
+           weight.layout == QuantLayout::BlockScaleK16M128x4 && weight.n == 14336 &&
+           weight.k == 5120;
 }
 
 void attn_input_proj_fused_rmsnorm_nvfp4(const Tensor& residual, const Tensor& norm_weight,
