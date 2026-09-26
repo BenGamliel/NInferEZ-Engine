@@ -134,6 +134,12 @@ public:
         return elapsed > granted_ ? elapsed - granted_ : 0;
     }
 
+    // The search time a gain can justify; a saturated gain is not evidence of value.
+    [[nodiscard]] std::uint64_t economic(std::uint64_t gain) const noexcept {
+        if (gain == std::numeric_limits<std::uint64_t>::max()) { return 0; }
+        return gain / kCostDivisor / allowance_.economic_sharing();
+    }
+
 private:
     static constexpr std::uint64_t kMinimumGrantNs = 5'000'000;
     static constexpr std::uint64_t kCostDivisor    = 20;
@@ -145,11 +151,6 @@ private:
         if (incumbent_cost == std::numeric_limits<std::uint64_t>::max()) { return 0; }
         return std::clamp(incumbent_cost / kCostDivisor, kMinimumGrantNs,
                           PlanningAllowance::kThoroughBoundaryNs);
-    }
-
-    [[nodiscard]] std::uint64_t economic(std::uint64_t gain) const noexcept {
-        if (gain == std::numeric_limits<std::uint64_t>::max()) { return 0; }
-        return gain / kCostDivisor / allowance_.economic_sharing();
     }
 
     bool boundary_limited_ = false;

@@ -10,7 +10,10 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstdarg>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <limits>
 #include <optional>
 #include <span>
@@ -146,6 +149,17 @@ public:
                 throw std::invalid_argument("materialization candidate IDs are invalid");
             }
         }
+        // NINFER_MAT_DEBUG traces the value-gate inputs of every materialization on stderr, so a
+        // lost re-touch shows which candidate lost to which incumbent, and by how much.
+        const bool trace_gates = std::getenv("NINFER_MAT_DEBUG") != nullptr;
+        const auto trace       = [trace_gates](const char* format, ...) {
+            if (!trace_gates) { return; }
+            std::va_list arguments;
+            va_start(arguments, format);
+            std::vfprintf(stderr, format, arguments);
+            va_end(arguments);
+            std::fflush(stderr);
+        };
         queue_.clear();
         pending_.clear();
         const std::size_t frontier_capacity = candidates.size() + 1U + kTargetBudget;
@@ -167,6 +181,14 @@ public:
             planning_saturating_add(projection_work, identity.projection_work);
             const FoldedCost cost = fold_identity(input, identity, machine_cost);
             identity_costs_.push_back(cost);
+            trace("[mat-debug] IDENT cand=%zu phys=%d now=%llu total=%llu prefill_tok=%llu "
+                  "reused_tok=%u bytes=%llu\n",
+                  index, static_cast<int>(identity.physical_status),
+                  static_cast<unsigned long long>(cost.now_ns),
+                  static_cast<unsigned long long>(cost.total_ns),
+                  static_cast<unsigned long long>(cost.remaining_text_prefill),
+                  cost.reused_prompt_tokens,
+                  static_cast<unsigned long long>(cost.transferred_bytes));
             std::optional<LogicalGoal> goal;
             if (identity.physical_status == MaterializationPhysicalStatus::Feasible) {
                 goal = logical_goal(input.id, identity.source_mode,
@@ -222,6 +244,17 @@ public:
                     *selected.candidate, prompt,
                     FinalScheduleIntent{.shared_capture_frontiers = shared_frontiers});
                 if (!sealed) { return std::nullopt; }
+                trace("[mat-debug] SELECT-FAST cand=%u now=%llu fut=%llu total=%llu "
+                      "prefill_tok=%llu reused_tok=%u stop=%s\n",
+                      identity_best->candidate_index,
+                      static_cast<unsigned long long>(identity_best->cost.now_ns),
+                      static_cast<unsigned long long>(identity_best->cost.future_loss_ns),
+                      static_cast<unsigned long long>(identity_best->cost.total_ns),
+                      static_cast<unsigned long long>(identity_best->cost.remaining_text_prefill),
+                      identity_best->cost.reused_prompt_tokens,
+                      materialization_stop_reason_name(
+                          needs_optional_search ? MaterializationStopReason::TimeBudget
+                                                : MaterializationStopReason::NoPressure));
                 MaterializationDiagnostics diagnostics = complete_diagnostics(
                     identity_best->cost, static_cast<std::uint32_t>(candidates.size()),
                     projection_work, planning_started,
@@ -462,6 +495,14 @@ public:
                                      complete, search_work, discovery_eligible)) {
                 stop_reason      = search_budget.stop_reason();
                 budget_exhausted = stop_reason == MaterializationStopReason::TimeBudget;
+                trace("[mat-debug] GATE DENY phase=%s op=%llu completion=%llu gain=%llu "
+                      "econ=%llu complete=%d stop=%s\n",
+                      materialization_search_phase_name(search_phase),
+                      static_cast<unsigned long long>(operation),
+                      static_cast<unsigned long long>(completion),
+                      static_cast<unsigned long long>(gain),
+                      static_cast<unsigned long long>(search_budget.economic(gain)),
+                      complete ? 1 : 0, materialization_stop_reason_name(stop_reason));
                 return false;
             }
             stop_reason      = MaterializationStopReason::QueueExhausted;
@@ -539,7 +580,18 @@ public:
                 mark_target(assessment.stable_target_ordinal, kTargetFeasible);
                 candidate_seeded[expected_candidate] = true;
             }
-            if (goal && cost.less(incumbent.cost)) {
+            const bool becomes_incumbent = goal && cost.less(incumbent.cost);
+            trace(
+                "[mat-debug] ASSESS cand=%u phys=%d now=%llu fut=%llu total=%llu "
+                "prefill_tok=%llu reused_tok=%u bytes=%llu incumbent_now=%llu ->inc=%d\n",
+                expected_candidate, static_cast<int>(assessment.physical_status),
+                static_cast<unsigned long long>(cost.now_ns),
+                static_cast<unsigned long long>(cost.future_loss_ns),
+                static_cast<unsigned long long>(cost.total_ns),
+                static_cast<unsigned long long>(cost.remaining_text_prefill),
+                cost.reused_prompt_tokens, static_cast<unsigned long long>(cost.transferred_bytes),
+                static_cast<unsigned long long>(incumbent.cost.now_ns), becomes_incumbent ? 1 : 0);
+            if (becomes_incumbent) {
                 if (cost.total_ns < initial_cost_ns && !first_improvement_ns) {
                     first_improvement_ns = elapsed_ns(search_started, Clock::now());
                 }

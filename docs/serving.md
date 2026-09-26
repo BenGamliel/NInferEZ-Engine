@@ -1334,7 +1334,11 @@ immediate, future-loss and total nanoseconds (`predicted_now_ns`, `predicted_fut
 means the wall or control allowance ran out, while a request too cheap to justify optional search
 reports `insufficient_expected_gain`. Search phases are `none`, `setup`, `construction`,
 `assessment`, `expansion` and `refinement`. Search is bounded and heuristic; these diagnostics do not
-claim model or global optimality, and aborted planning attempts are not published.
+claim model or global optimality, and aborted planning attempts are not published. With the
+environment variable `NINFER_MAT_DEBUG` set, admission also writes its raw inputs to stderr: a
+`[candgen]` line for each catalogued checkpoint it did or did not turn into a candidate, and
+`[mat-debug]` lines for each identity cost, fast selection, assessed target and denied search step,
+the last with the gain and economic bound behind the denial.
 `cached_prefix_tokens` and `restored_host_bytes` describe a hybrid prefix-cache admission and are `0`
 with the checkpoint catalog. `cached_prefix_tokens` is the longest prompt prefix held as cached KV
 blocks, whether or not it was reusable: reuse also needs a state snapshot inside it, so a gap to
