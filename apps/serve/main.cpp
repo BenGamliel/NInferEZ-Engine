@@ -1,3 +1,4 @@
+#include "ninfer_build_id.h"
 #include "product/logging/logging.h"
 #include "product/logging/startup_log.h"
 #include "serve/generation_service.h"
@@ -87,6 +88,7 @@ int main(int argc, char** argv) {
         // has been listenable since bind() either way; the difference is whether a caller arriving
         // during the ten seconds of weight loading gets a documented "still loading" or a hang.
         server.start_serving_during_startup();
+        logger->info("build {}", NINFER_BUILD_ID);
 
         ninfer::serve::GenerationService service(options, startup_log.observer());
         startup_log.engine_ready(service.load_summary());
