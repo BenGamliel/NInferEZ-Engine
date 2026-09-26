@@ -1070,6 +1070,24 @@ private:
     owner_exclusive_resources(const SequenceState& sequence) const;
     [[nodiscard]] detail::PhysicalResources
     owner_exclusive_resources(const SharedPrefixState& shared) const;
+    // What an active snapshot of this sequence moves out of its exclusive ownership: every full
+    // page it alone references (Device page and any Host replica).
+    [[nodiscard]] detail::PhysicalResources
+    active_snapshot_shared_resources(const SequenceState& sequence) const;
+
+    // Releasing an owner can leave pages or checkpoints it shared with an active sequence
+    // referenced by that sequence alone. Their ownership then moves into the active lineage, so
+    // the active entitlement grows by exactly what became exclusive. A release site takes the
+    // baseline first and credits after; lanes whose continuation changed in between are skipped.
+    struct ActiveExclusiveEntry {
+        std::uint32_t continuation = 0;
+        detail::PhysicalResources resources;
+    };
+
+    using ActiveExclusiveBaseline =
+        std::array<std::optional<ActiveExclusiveEntry>, kMaximumConcurrency>;
+    [[nodiscard]] ActiveExclusiveBaseline active_exclusive_baseline() const noexcept;
+    void credit_active_ownership_transfers(const ActiveExclusiveBaseline& baseline) noexcept;
     [[nodiscard]] detail::PhysicalResources physical_occupancy() const noexcept;
     [[nodiscard]] bool physical_peak_fits(detail::PhysicalResources peak) const noexcept;
     [[nodiscard]] StateImageHandle

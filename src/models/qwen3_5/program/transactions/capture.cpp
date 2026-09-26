@@ -117,16 +117,15 @@ ProgramImpl::inspect_capture(const CaptureOffer& offer, const SharedPrefixHandle
         if (!sequence.kv) { throw std::logic_error("capture source has no KV bundle"); }
         text_snapshot_shape =
             text_kv_addresses->active_snapshot_shape(sequence.kv->text, sequence.text_kv_valid);
-        active_removed.device.main_kv_pages = text_snapshot_shape->unique_full_pages;
-        added.device.main_kv_pages          = text_snapshot_shape->copied_pages();
+        added.device.main_kv_pages = text_snapshot_shape->copied_pages();
 
         if (sequence.kv->backend) {
             const std::uint32_t backend_frontier = backend_kv_valid(sequence);
             backend_snapshot_shape               = backend_kv_addresses->active_snapshot_shape(
                 *sequence.kv->backend, backend_frontier);
-            active_removed.device.backend_kv_pages = backend_snapshot_shape->unique_full_pages;
-            added.device.backend_kv_pages          = backend_snapshot_shape->copied_pages();
+            added.device.backend_kv_pages = backend_snapshot_shape->copied_pages();
         }
+        active_removed = active_snapshot_shared_resources(sequence);
     }
 
     detail::PhysicalResources replaced_private;
@@ -698,6 +697,15 @@ bool ProgramImpl::prepare_active_capture(ActiveCaptureTransaction& transaction) 
             throw std::logic_error("active capture source is not an in-place writer");
         }
         trim_sequence_kv(sequence, sequence.text_kv_valid, backend_kv_valid(sequence));
+        // Owners released since the assessment (pressure victims, the replaced shared prefix)
+        // can have left more of these pages referenced by this sequence alone; that release
+        // already moved them into the active entitlement. The snapshot shares exactly the pages
+        // that are exclusive now, so the entitlement it removes is measured here.
+        const detail::PhysicalResources shared    = active_snapshot_shared_resources(sequence);
+        detail::PhysicalResources& active_removed = transaction.active_entitlement_delta.removed;
+        active_removed.device.main_kv_pages       = shared.device.main_kv_pages;
+        active_removed.device.backend_kv_pages    = shared.device.backend_kv_pages;
+        active_removed.host.kv_bytes              = shared.host.kv_bytes;
         transaction.active_text_destination = text_kv_addresses->create_inactive();
         if (!transaction.active_text_destination) {
             throw std::logic_error("selected capture has no Text KV address descriptor");

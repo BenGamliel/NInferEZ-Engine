@@ -109,11 +109,15 @@ StartResult ProgramImpl::start_request(MaterializationTransaction& transaction) 
         }
 
         const detail::PhysicalResources active = details.demand.active_entitlement;
+        // Consuming or recycling the source (truncating it in place, releasing it after its COW)
+        // can leave pages it shared with another active sequence referenced by that sequence alone.
+        const ActiveExclusiveBaseline baseline = active_exclusive_baseline();
         active_continuations[lane]             = *continuation_index;
         SequenceState& sequence                = continuation_states[*continuation_index];
         sequence.lane                          = lane;
         transaction.root_continuation_index.reset();
         start_sequence(lane, sequence, transaction);
+        credit_active_ownership_transfers(baseline);
         detail::PhysicalResources actual         = owner_exclusive_resources(sequence);
         actual.device.active_lanes               = 1;
         const detail::PhysicalResources expected = active;
@@ -730,6 +734,7 @@ ProgramImpl::release_shared_prefix_state_strict(std::uint32_t index,
         SharedPrefixState& shared               = shared_prefix_states[index];
         SharedPrefixSlot& slot                  = shared_prefix_slots[index];
         const detail::PhysicalResources removed = owner_exclusive_resources(shared);
+        const ActiveExclusiveBaseline baseline  = active_exclusive_baseline();
         const bool last_state_reference = state_store->checkpoint_references(shared.state) == 1;
         if (shared.kv->backend && !backend_kv_addresses->release(*shared.kv->backend)) {
             std::terminate();
@@ -742,6 +747,7 @@ ProgramImpl::release_shared_prefix_state_strict(std::uint32_t index,
         slot.role = SharedPrefixSlotRole::Free;
         if (++slot.generation == 0) { ++slot.generation; }
         if (host_kv_extents) { (void)host_kv_extents->release_unreferenced(); }
+        credit_active_ownership_transfers(baseline);
         return removed;
     } catch (...) { std::terminate(); }
 }

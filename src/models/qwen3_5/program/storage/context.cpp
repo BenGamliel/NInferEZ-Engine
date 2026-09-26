@@ -215,10 +215,12 @@ void ProgramImpl::release_continuation_slot_strict(std::uint32_t index,
     try {
         if (!can_release_continuation_slot_strict(index)) { std::terminate(); }
     } catch (...) { std::terminate(); }
-    SequenceState& sequence = continuation_states[index];
+    const ActiveExclusiveBaseline baseline = active_exclusive_baseline();
+    SequenceState& sequence                = continuation_states[index];
     release_sequence_kv_strict(sequence, written_to_disk);
     release_sequence_state_strict(sequence);
     retire_continuation_slot(index);
+    credit_active_ownership_transfers(baseline);
 }
 
 void ProgramImpl::release_continuation_slot_best_effort(std::uint32_t index) noexcept {
@@ -226,11 +228,13 @@ void ProgramImpl::release_continuation_slot_best_effort(std::uint32_t index) noe
         continuation_slots[index].role == ContinuationSlotRole::Free) {
         return;
     }
-    SequenceState& sequence = continuation_states[index];
+    const ActiveExclusiveBaseline baseline = active_exclusive_baseline();
+    SequenceState& sequence                = continuation_states[index];
     release_active_shared_references(sequence);
     release_sequence_kv(sequence);
     release_sequence_state(sequence);
     retire_continuation_slot(index);
+    credit_active_ownership_transfers(baseline);
 }
 
 void ProgramImpl::retire_continuation_slot(std::uint32_t index) noexcept {
@@ -446,6 +450,80 @@ ProgramImpl::owner_exclusive_resources(const SharedPrefixState& shared) const {
         }
     }
     return out;
+}
+
+detail::PhysicalResources
+ProgramImpl::active_snapshot_shared_resources(const SequenceState& sequence) const {
+    if (!sequence.kv || !text_kv_addresses || !text_kv_pages) {
+        throw std::logic_error("active snapshot source has no KV stores");
+    }
+    detail::PhysicalResources out;
+    const auto add_kv = [&](const KVAddressSpaceStore& addresses, const LogicalKVPageStore& pages,
+                            KVAddressSpaceHandle address, std::uint32_t frontier,
+                            std::uint32_t& device_pages) {
+        const std::uint32_t full_pages = frontier / static_cast<std::uint32_t>(kPagedKVPageSize);
+        if (full_pages > addresses.mapped_pages(address)) {
+            throw std::logic_error("active snapshot frontier exceeds its mapped KV pages");
+        }
+        for (std::uint32_t page = 0; page < full_pages; ++page) {
+            const LogicalKVPageHandle logical = addresses.logical_page(address, page);
+            if (pages.address_references(logical) != 1) { continue; }
+            if (pages.device_resident(logical)) { ++device_pages; }
+            if (pages.host_resident(logical)) {
+                if (!host_kv_extents) { throw std::logic_error("missing Host KV extent store"); }
+                const std::size_t stride =
+                    host_kv_extents->view(pages.host_replica(logical).extent).layout().page_stride;
+                if (stride > std::numeric_limits<std::size_t>::max() - out.host.kv_bytes) {
+                    throw std::overflow_error("active snapshot Host KV byte count overflow");
+                }
+                out.host.kv_bytes += stride;
+            }
+        }
+    };
+    add_kv(*text_kv_addresses, *text_kv_pages, sequence.kv->text, sequence.text_kv_valid,
+           out.device.main_kv_pages);
+    if (sequence.kv->backend) {
+        if (!backend_kv_addresses || !backend_kv_pages) {
+            throw std::logic_error("missing Backend KV stores");
+        }
+        add_kv(*backend_kv_addresses, *backend_kv_pages, *sequence.kv->backend,
+               backend_kv_valid(sequence), out.device.backend_kv_pages);
+    }
+    return out;
+}
+
+ProgramImpl::ActiveExclusiveBaseline ProgramImpl::active_exclusive_baseline() const noexcept {
+    ActiveExclusiveBaseline out{};
+    for (std::uint32_t lane = 0; lane < max_concurrency; ++lane) {
+        const std::uint32_t continuation = active_continuations[lane];
+        if (requests[lane].lifecycle == Lifecycle::Empty || continuation >= continuation_capacity) {
+            continue;
+        }
+        try {
+            out[lane] = ActiveExclusiveEntry{
+                .continuation = continuation,
+                .resources    = owner_exclusive_resources(continuation_states[continuation]),
+            };
+        } catch (...) {}
+    }
+    return out;
+}
+
+void ProgramImpl::credit_active_ownership_transfers(
+    const ActiveExclusiveBaseline& baseline) noexcept {
+    for (std::uint32_t lane = 0; lane < max_concurrency; ++lane) {
+        if (!baseline[lane] || requests[lane].lifecycle == Lifecycle::Empty ||
+            active_continuations[lane] != baseline[lane]->continuation) {
+            continue;
+        }
+        try {
+            const detail::PhysicalResources exclusive =
+                owner_exclusive_resources(continuation_states[baseline[lane]->continuation]);
+            requests[lane].active_resources = checked_resource_sum(
+                requests[lane].active_resources,
+                positive_resource_difference(exclusive, baseline[lane]->resources));
+        } catch (...) {}
+    }
 }
 
 detail::PhysicalResources ProgramImpl::physical_occupancy() const noexcept {
@@ -1004,8 +1082,9 @@ bool ProgramImpl::clear_lane_strict(SequenceState& sequence, RequestControl& req
     try {
         if (!can_clear_lane_strict(sequence)) { return false; }
     } catch (...) { return false; }
-    const auto* begin                = continuation_states.data();
-    const std::uint32_t continuation = static_cast<std::uint32_t>(&sequence - begin);
+    const auto* begin                      = continuation_states.data();
+    const std::uint32_t continuation       = static_cast<std::uint32_t>(&sequence - begin);
+    const ActiveExclusiveBaseline baseline = active_exclusive_baseline();
     release_active_shared_references_strict(sequence);
     release_active_sequence_kv_strict(sequence);
     release_active_sequence_state_strict(sequence);
@@ -1016,6 +1095,7 @@ bool ProgramImpl::clear_lane_strict(SequenceState& sequence, RequestControl& req
     request.active_resources     = {};
     request.optional_resources   = {};
     request.publish_continuation = true;
+    credit_active_ownership_transfers(baseline);
     return true;
 }
 
