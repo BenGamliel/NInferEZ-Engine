@@ -285,6 +285,16 @@ int main() {
             live.clear();
             reservation.reset();
 
+            // Free pages that back an entitlement are not lendable: the reservation materializes
+            // them later, and a loan that took them would leave it nothing to materialize.
+            std::optional<ninfer::DeviceKVPageReservation> promised =
+                pages.reserve(pages.available_pages() - unit + 1);
+            failures += expect(ninfer::plan_kv_loan(fixture, pages, granule).granules.empty(),
+                               "pages promised to a reservation cannot fund a loan");
+            promised.reset();
+            failures += expect(!ninfer::plan_kv_loan(fixture, pages, granule).granules.empty(),
+                               "the same pages lend once the reservation is released");
+
             const ninfer::KVLoanPlan huge =
                 ninfer::plan_kv_loan(fixture, pages, 64ULL * granule);
             failures += expect(huge.granules.empty(), "a request beyond the pool is refused");
