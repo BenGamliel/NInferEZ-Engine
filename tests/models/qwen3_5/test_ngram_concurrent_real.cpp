@@ -112,6 +112,8 @@ ninfer::EngineOptions options_for(const char* artifact, const std::string& backe
     options.max_context         = max_context;
     options.kv_capacity         = ninfer::KvCapacityPolicy::explicit_capacity(max_context);
     options.max_concurrency     = concurrency;
+    // Mixed rounds need a lane admitted while another still prefills.
+    options.concurrent_prefill  = true;
     options.prefill_chunk       = 1024;
     options.enable_vision       = false;
     options.use_cuda_graph      = true;

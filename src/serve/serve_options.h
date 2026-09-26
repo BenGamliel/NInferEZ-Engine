@@ -100,6 +100,7 @@ struct ServeOptions {
     // is given and carries no API key, so it stays off unless asked for by name.
     bool webui_mcp_proxy = false;
     bool structured_output = false; // accept JSON/JSON Schema constrained requests
+    bool concurrent_prefill = false; // admit to free lanes while other requests prefill
     // --unconstrained-response-format: without structured_output, generate a JSON or JSON Schema
     // request unconstrained instead of refusing it, for clients that always send a format.
     bool unconstrained_response_format = false;

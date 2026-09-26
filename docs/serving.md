@@ -1181,6 +1181,7 @@ The table lists executable defaults. The startup example selects a long-context 
 | `--disk-kv-directstorage` | read restores through Microsoft DirectStorage; Windows builds with `-DNINFER_DIRECTSTORAGE=ON` only, untested | mapped reads |
 | `--first-token-logprobs` | accept Chat Completions `top_logprobs` (`1..20`, non-streaming) and report the first generated token's log probability with that many alternatives under the raw next-token distribution; `logprobs: true` stays unsupported | off |
 | `--context-cache-policy default\|rolling` | `rolling`: within one cache session (a Responses `prompt_cache_key`), a capture that extends a resident checkpoint the request matched exactly inherits that resident's demand, so a conversation whose prompt only grows keeps rolling its frontier forward; with conversations sharing a prefix, one conversation's extension can evict the prefix the others use | `default` |
+| `--concurrent-prefill` | admit waiting requests to free lanes while other requests prefill, instead of holding admission until the staged prefill finishes | off |
 | `--thorough-admission-search` | a new request's admission searches up to 250 ms for its reuse plan at every boundary, even while other requests decode (otherwise 50 ms idle, 10 ms busy), and a request whose plan saves more earns a longer base grant; a running decode can then pause up to that long when a request arrives | off |
 | `--release-diverged-checkpoints` | a private checkpoint of one cache session whose next request diverges from it at the checkpoint's frontier keeps no retention value, so it is the first to go when the cache needs room; a checkpoint that merely cannot serve the request, another session's or a shared prefix, keeps its value. A client that switches back to an earlier branch of the conversation loses that branch's cache | off |
 | `--no-thinking` | disable thinking by default | thinking on |
@@ -1360,9 +1361,13 @@ against Windows headers but has not been run.
 
 The server owns one resident Engine with a startup-fixed capacity of `1..8` active generation
 requests. At each decode boundary, every decode-ready request is compacted into one batch and
-processed by one model traversal and, when graphs are enabled, one exact-batch CUDA Graph replay. A
-request joins that batch only after its single-request prefill finishes; when it completes or is
-cancelled, the next boundary rebuilds the batch without an empty row.
+processed by one model traversal and, when graphs are enabled, one exact-batch CUDA Graph replay.
+A request joins that batch only after its staged prefill finishes; when it completes or is
+cancelled, the next boundary rebuilds the batch without an empty row. A staged prefill holds
+admission back until it finishes. With `--concurrent-prefill` waiting requests are still admitted
+to free lanes while others prefill, so a new request's admission and prefill overlap the prefill
+and decode of the others (each prefill unit advances one chunk of the lowest staged lane per
+worker boundary).
 
 `--max-pending-requests` bounds the requests waiting behind the active set. The total generation
 request lifetime capacity is `max_concurrency + max_pending_requests`, including requests still in

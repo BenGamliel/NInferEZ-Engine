@@ -263,6 +263,9 @@ struct EngineOptions {
     // Reserves the grammar mask planes that JSON and JSON Schema constrained requests sample
     // through. Off, those requests are refused and a DFlash round carries no grammar stage.
     bool structured_output = false;
+    // Admit waiting requests to free lanes while other requests prefill, instead of holding
+    // admission until the staged prefill finishes.
+    bool concurrent_prefill = false;
     // Windows builds with NINFER_D3D12_RESIDENCY only: allocate the device arenas from a D3D12
     // heap held resident at maximum priority and budget the runtime against the adapter's
     // dedicated memory less the weights and a 512 MiB desktop floor, not against what is free now,

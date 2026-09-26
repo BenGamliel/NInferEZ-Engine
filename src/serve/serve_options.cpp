@@ -87,7 +87,7 @@ std::string serve_usage_text(const char* argv0) {
            "[--disk-kv-path DIR] [--disk-kv-gib N] [--disk-kv-restore] [--disk-kv-directstorage] "
            "[--first-token-logprobs] "
            "[--context-cache-policy default|rolling] [--release-diverged-checkpoints] "
-           "[--thorough-admission-search] "
+           "[--thorough-admission-search] [--concurrent-prefill] "
            "[--request-log-jsonl FILE] "
            "[--response-store-max-records N] [--response-store-max-mib N] "
            "[--kv-dtype bf16|int8|fp8|rk8v4|rk4v4|rk4v4-e8|rk2v4-e8|nvfp4|k8v4] "
@@ -174,6 +174,8 @@ std::string serve_usage_text(const char* argv0) {
            "checkpoint inherit its demand, for one conversation whose prompt only grows\n"
            "       --release-diverged-checkpoints values nothing a conversation's own private "
            "checkpoint that its next prompt diverges from, so that checkpoint goes first\n"
+           "       --concurrent-prefill admits waiting requests to free lanes while other requests "
+           "prefill, instead of holding admission until the staged prefill finishes\n"
            "       --thorough-admission-search searches up to 250 ms for a new request's reuse plan "
            "even while other requests decode, instead of 10 ms, and grants a costly request a "
            "longer search\n"
@@ -410,6 +412,8 @@ ServeOptions parse_serve_options(int argc, char** argv) {
         } else if (arg == "--release-diverged-checkpoints") {
             options.context_cache.release_diverged_checkpoints = true;
             context_capacity_explicit                          = true;
+        } else if (arg == "--concurrent-prefill") {
+            options.concurrent_prefill = true;
         } else if (arg == "--thorough-admission-search") {
             options.context_cache.thorough_admission_search = true;
             context_capacity_explicit                       = true;

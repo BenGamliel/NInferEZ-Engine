@@ -833,6 +833,10 @@ int main() {
             (void)parse({"ninfer-serve", "model.ninfer", "--vision", "--vision-offload", "yes"});
         } catch (const std::invalid_argument&) { offload_mode_rejected = true; }
         failures += check(offload_mode_rejected, "--vision-offload yes was accepted");
+        failures += check(parse({"ninfer-serve", "model.ninfer", "--concurrent-prefill"})
+                                  .concurrent_prefill &&
+                              !parse({"ninfer-serve", "model.ninfer"}).concurrent_prefill,
+                          "--concurrent-prefill was not an off-by-default switch");
         failures += check(parse({"ninfer-serve", "model.ninfer", "--thorough-admission-search"})
                                   .context_cache.thorough_admission_search &&
                               !parse({"ninfer-serve", "model.ninfer"})
