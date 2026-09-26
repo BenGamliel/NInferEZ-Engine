@@ -324,6 +324,8 @@ runtime::ExecutionTiming ProgramImpl::append_forced_tokens(
             }
 
             ensure_sequence_kv_mapped(sequence, end, backend_kv_cache() ? end : 0U);
+            // Forced tokens run through Prefill, which reads the shared step table-row scalars.
+            bind_sequence_kv(sequence);
 
             sequence.ledger.insert(sequence.ledger.end(), forced.begin(), forced.end());
             if (sequence.ledger.size() != static_cast<std::size_t>(end) + 1U) {

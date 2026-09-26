@@ -1049,6 +1049,10 @@ runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
                 .timing  = timing.finish(),
             };
         }
+        // Prefill attention addresses its KV through the shared step table-row scalars. Another
+        // lane's staging or capture can rebind them between this lane's steps, so every step
+        // binds its own rows before any Prefill or MTP-bridge work.
+        bind_sequence_kv(sequence);
         StateImageSelectors selectors = state_selectors(sequence);
         Tensor rewrite_capture_hidden;
         Tensor* rewrite_capture_hidden_ptr = nullptr;
