@@ -155,6 +155,16 @@ cmake --build build-windows --config Release --parallel
 The source rejects unsupported CUDA architectures for this fork. CUDA 13 uses MSVC's conforming
 preprocessor automatically.
 
+`scripts\build-native.bat` builds without the vcpkg toolchain, against a prebuilt vcpkg triplet
+tree (Visual Studio 2026 with CUDA 13 by default, for an RTX 5090 at `120a`):
+`scripts\build-native.bat configure`, then `build`, or `target ninfer-serve` for one target. It
+exports `VCPKG_ROOT` and `VCPKG_TARGET_TRIPLET`, from which `cmake\FindFFMPEG.cmake` finds FFmpeg
+and whose DLLs are staged beside every executable; `NINFER_VCVARS`, `NINFER_GENERATOR`,
+`NINFER_CUDA_PATH`, `NINFER_VCPKG_ROOT`, `NINFER_VCPKG_TRIPLET`, `NINFER_CUDA_ARCH` and
+`NINFER_BUILD_DIR` override its defaults. Windows builds decode PNG images natively (a prebuilt
+FFmpeg tree may have no PNG decoder) and pass the NVFP4 TMA descriptors through device memory,
+since MSVC cannot pass them by value.
+
 ## Release validation
 
 The v0.5 Windows release gate rebuilt `ninfer.exe`, `ninfer-serve.exe`, and `ninfer_bench.exe`,

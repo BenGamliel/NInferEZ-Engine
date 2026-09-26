@@ -120,6 +120,8 @@ CMake configure command as `-DNAME=VALUE`.
 | `NINFER_WEBUI_DIR=PATH` | compiles the WebUI in that directory (an `index.html` or `index.html.gz` at its root) into the server |
 | `NINFER_SM120_NATIVE=ON` | on a `120a` build, compiles upstream's native routes instead of the `mma.sync` path (every `120a` build compiles the FP8 A8 and NVFP4 W4A4 units) |
 | `NINFER_PDL=ON` | on a `120a` build of the `mma.sync` path, launches decode-graph kernels as programmatic dependents, so a kernel stages its weights while the one before it finishes (the native routes always do) |
+| `NINFER_TMA_STAGING=ON` | passes the NVFP4 TMA descriptors through device memory with a capturable staging kernel, as Windows builds must, so that path can be tested on Linux (`120a`) |
+| `NINFER_MEDIA_NATIVE_PNG=ON` | decodes PNG images natively instead of through FFmpeg, as Windows builds do by default, so that decoder can be tested on Linux |
 | `NINFER_D3D12_RESIDENCY=ON` | Windows: offers `--wddm-evictable-budget`, device arenas from a D3D12 heap held resident |
 | `NINFER_DIRECTSTORAGE=ON` | Windows: fetches the DirectStorage 1.3 runtime and offers `--disk-kv-directstorage` for disk-tier restores |
 

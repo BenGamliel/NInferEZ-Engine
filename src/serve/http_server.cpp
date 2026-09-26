@@ -8,6 +8,7 @@
 #include "serve/webui.h"
 
 #include <nlohmann/json.hpp>
+#include <spdlog/logger.h>
 
 #include <chrono>
 #include <exception>

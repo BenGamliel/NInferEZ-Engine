@@ -72,13 +72,23 @@ def _pairs(values, label):
     return result
 
 
+def _recipe_parts(value: str):
+    """Split a FILE[:function] recipe reference.
+
+    Only a colon followed by a bare identifier is the separator; any other colon -
+    such as a Windows drive letter, or one inside a POSIX path component - belongs
+    to the path."""
+    filename, separator, function = value.rpartition(":")
+    if not separator or not function.isidentifier():
+        return value, "configure"
+    return filename, function
+
+
 def _function(value: str):
     recipes = {**RECIPES, **TERNARY_RECIPES, **GGUF_RECIPES}
     if value in recipes:
         return recipes[value]
-    filename, separator, function = value.rpartition(":")
-    if not separator:
-        filename, function = value, "configure"
+    filename, function = _recipe_parts(value)
     path = Path(filename).resolve()
     spec = importlib.util.spec_from_file_location("ninfer_user_recipe", path)
     if spec is None or spec.loader is None:

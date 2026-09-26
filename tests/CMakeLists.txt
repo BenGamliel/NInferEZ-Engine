@@ -10,3 +10,8 @@ include(models/qwen3_5/tests.cmake)
 include(ops/tests.cmake)
 
 ninfer_finalize_bundle(ninfer_tests)
+
+# Every test executable shares one per-config runtime directory; stage the FFmpeg/curl DLL closure
+# there once so they resolve their imports (the Windows loader only searches the executable's own
+# directory, the system directories and PATH).
+ninfer_stage_test_runtime_dlls(ninfer_tests)

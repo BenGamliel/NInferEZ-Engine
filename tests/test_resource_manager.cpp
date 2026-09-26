@@ -16,7 +16,30 @@
 #include <variant>
 #include <vector>
 
+#ifdef _WIN32
+// Minimal declarations; including <windows.h> here would poison the TU with min/max macros.
+extern "C" {
+unsigned timeBeginPeriod(unsigned);
+unsigned timeEndPeriod(unsigned);
+}
+#pragma comment(lib, "winmm.lib")
+#endif
+
 namespace {
+
+// Windows' default system timer quantum (~15.6ms) stretches the fake's 1ms pressure-assessment
+// sleep to ~16ms, exhausting the planner's 5ms economic search budget before the deep reuse
+// closure is explored. Raise the timing resolution for the process lifetime so sleep_for
+// honors the upstream-intended durations.
+struct TimerResolution {
+    bool raised = false;
+#ifdef _WIN32
+    TimerResolution() { raised = timeBeginPeriod(1) == 0; }
+    ~TimerResolution() {
+        if (raised) { timeEndPeriod(1); }
+    }
+#endif
+};
 
 using ninfer::PrefixReusePath;
 using ninfer::RuntimeStats;
@@ -3916,6 +3939,7 @@ void test_publication_only_pressure_constructs_adoptable_target() {
 } // namespace
 
 int main() {
+    TimerResolution timer_resolution;
     run_test("independent complete-target oracle",
              test_complete_search_against_small_exhaustive_oracle);
     run_test("publication-only construction",

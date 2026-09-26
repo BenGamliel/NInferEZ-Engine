@@ -45,13 +45,13 @@ struct Nvfp4LinearSwiGluTmaSharedStorage {
 template <class Geometry, class Schedule>
 __global__ __launch_bounds__(
     Schedule::kThreads,
-    Schedule::
-        kMinBlocksPerSm) void nvfp4_linear_swiglu_w4a4_tma_kernel(const __grid_constant__
-                                                                      Nvfp4W4a4TmaDescriptors
-                                                                          descriptors,
-                                                                  float alpha,
-                                                                  __nv_bfloat16* __restrict__ output,
-                                                                  int token_count) {
+    Schedule::kMinBlocksPerSm) void nvfp4_linear_swiglu_w4a4_tma_kernel(
+#ifdef NINFER_TMA_STAGED_DESCRIPTORS
+    const Nvfp4W4a4TmaDescriptors* descriptors_pointer,
+#else
+    const __grid_constant__ Nvfp4W4a4TmaDescriptors descriptors,
+#endif
+    float alpha, __nv_bfloat16* __restrict__ output, int token_count) {
     static_assert(Geometry::kOutputRows == 34816);
     static_assert(Geometry::kInputRows == 5120);
     static_assert((Geometry::kInputRows % Schedule::kBlockK) == 0);
@@ -73,6 +73,13 @@ __global__ __launch_bounds__(
     const int token_begin = block_y * Schedule::kBlockM;
     const int pair_begin  = block_x * kPairN;
 
+#ifdef NINFER_TMA_STAGED_DESCRIPTORS
+    // The descriptors are stored into a device buffer by the launcher's staging kernel through
+    // the generic proxy; the producer acquires each tensor map for the TMA proxy before its first
+    // cp.async.bulk.tensor (core/tma_descriptor_staging.cuh).
+    const Nvfp4W4a4TmaDescriptors& descriptors = *descriptors_pointer;
+#endif
+
     if (threadIdx.x == 0) {
 #pragma unroll
         for (int stage = 0; stage < Schedule::kStages; ++stage) {
@@ -90,6 +97,12 @@ __global__ __launch_bounds__(
             asm volatile("setmaxnreg.dec.sync.aligned.u32 40;" : : : "memory");
         }
         if (threadIdx.x == 0) {
+#ifdef NINFER_TMA_STAGED_DESCRIPTORS
+            acquire_staged_tensor_map(&descriptors.a_codes);
+            acquire_staged_tensor_map(&descriptors.b_codes);
+            acquire_staged_tensor_map(&descriptors.a_scales);
+            acquire_staged_tensor_map(&descriptors.b_scales);
+#endif
 #pragma unroll 1
             for (int k_tile = 0; k_tile < kKTiles; ++k_tile) {
                 const int stage                 = k_tile % Schedule::kStages;

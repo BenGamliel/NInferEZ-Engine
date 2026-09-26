@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/tma_descriptor_staging.cuh"
 #include "ops/common/mbarrier.cuh"
 #include "ops/common/memory.cuh"
 #include "ops/common/mma.cuh"
@@ -94,6 +95,14 @@ Nvfp4W4a4TmaDescriptors make_nvfp4_w4a4_tma_descriptors(
     return descriptors;
 }
 
+// The single Windows descriptor staging for Nvfp4W4a4TmaDescriptors, shared by every W4A4 TMA
+// launch route (linear, attention, GDN, linear-add, LinearSwiGLU). See tma_descriptor_staging.cuh
+// for the invariants its device buffer relies on.
+inline TmaDescriptorStaging<Nvfp4W4a4TmaDescriptors>& tma_descriptor_staging() {
+    static TmaDescriptorStaging<Nvfp4W4a4TmaDescriptors> staging;
+    return staging;
+}
+
 template <int BlockM, int Stages, int MinBlocksPerSm,
           CUtensorMapL2promotion WeightCodePromotion = CU_TENSOR_MAP_L2_PROMOTION_NONE>
 struct Nvfp4W4a4TmaSchedule {
@@ -184,9 +193,20 @@ __device__ __forceinline__ void nvfp4_tma_load_2d(void* destination, const CUten
 template <class Geometry, class Schedule, class Epilogue, class OutputPolicy>
 __global__
 __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void nvfp4_w4a4_tma_kernel(
+#ifdef NINFER_TMA_STAGED_DESCRIPTORS
+    // MSVC cannot pass the over-aligned (alignas(128)) CUtensorMap struct by value as a
+    // __grid_constant__ parameter (C2719), so on Windows the descriptors are pointer-passed: the
+    // launcher's staging kernel stores them into a device buffer and this kernel reads them from
+    // global memory. The epilogue/output keep ordinary by-value passing because a grid-constant
+    // struct holding a sub-8-byte member (the contiguous output's int32 stride) mis-packs.
+    const Nvfp4W4a4TmaDescriptors* descriptors_pointer, float alpha, const Epilogue epilogue,
+    const OutputPolicy output, int token_count
+#else
     const __grid_constant__ Nvfp4W4a4TmaDescriptors descriptors, float alpha,
     const __grid_constant__ Epilogue epilogue, const __grid_constant__ OutputPolicy output,
-    int token_count) {
+    int token_count
+#endif
+    ) {
     static_assert((Geometry::kInputRows % Schedule::kBlockK) == 0);
     static_assert((Geometry::kOutputRows % Schedule::kBlockN) == 0);
     static_assert(Schedule::kStages >= 2, "the activation-scale buffer needs two slots");
@@ -198,6 +218,15 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void nvfp4_w4a4
     nvfp4_tma_raster_blocks(block_x, block_y);
     const int token_begin = block_y * Schedule::kBlockM;
     const int row_begin   = block_x * Schedule::kBlockN;
+
+#ifdef NINFER_TMA_STAGED_DESCRIPTORS
+    // The descriptors are stored into a device buffer by the launcher's staging kernel (global
+    // memory). On the non-Windows path they are __grid_constant__ (constant memory), which the
+    // TMA (tensormap) proxy reads coherently for free; a global-memory tensor map written by the
+    // generic proxy is not, until it is acquired. The producer (thread 0) acquires each map once,
+    // before its first cp.async.bulk.tensor.
+    const Nvfp4W4a4TmaDescriptors& descriptors = *descriptors_pointer;
+#endif
 
     if (threadIdx.x == 0) {
 #pragma unroll
@@ -216,6 +245,17 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void nvfp4_w4a4
             asm volatile("setmaxnreg.dec.sync.aligned.u32 40;" : : : "memory");
         }
         if (threadIdx.x == 0) {
+#ifdef NINFER_TMA_STAGED_DESCRIPTORS
+            // Each 128-byte tensor map needs its own acquire: the fence covers only the map at
+            // its address, and the buffer's address repeats with new contents every launch.
+            acquire_staged_tensor_map(&descriptors.a_codes);
+            acquire_staged_tensor_map(&descriptors.b_codes);
+            acquire_staged_tensor_map(&descriptors.a_scales);
+            acquire_staged_tensor_map(&descriptors.b_scales);
+            // The activation codes/scales are produced by the quantize kernel (generic proxy);
+            // make those global writes visible to the TMA (async) proxy that reads them.
+            asm volatile("fence.proxy.async.global;" : : : "memory");
+#endif
 #pragma unroll 1
             for (int k_tile = 0; k_tile < kKTiles; ++k_tile) {
                 const int stage                 = k_tile % Schedule::kStages;

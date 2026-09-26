@@ -40,6 +40,14 @@ endif()
 # kernel before it finishes (src/core/pdl.cuh). It needs sm_90 or newer, so the compatibility path
 # launches in stream order; NINFER_PDL=ON turns it on for a 120a build of that path. The native
 # routes always use it.
+# MSVC cannot pass the over-aligned CUtensorMap descriptors of the NVFP4 TMA kernels by value, so
+# Windows builds stage them through device memory with a capturable kernel
+# (src/core/tma_descriptor_staging.cuh). NINFER_TMA_STAGING=ON builds that path elsewhere, to test
+# it on the GPUs that run the TMA routes.
+option(NINFER_TMA_STAGING "Pass NVFP4 TMA descriptors through device memory, as Windows does" OFF)
+if(WIN32 OR NINFER_TMA_STAGING)
+  add_compile_definitions(NINFER_TMA_STAGED_DESCRIPTORS=1)
+endif()
 option(NINFER_PDL "On a 120a build, launch decode-graph kernels as programmatic dependents" OFF)
 if(NINFER_PDL)
   if(NOT CMAKE_CUDA_ARCHITECTURES STREQUAL "120a")
@@ -137,7 +145,7 @@ if(MSVC)
     $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/utf-8>)
   # CUDA's static runtime requests LIBCMT even when the application and vcpkg dependencies use
   # the project-wide /MD runtime. Keep one CRT in the final process.
-  add_link_options(/NODEFAULTLIB:LIBCMT)
+  add_link_options($<HOST_LINK:/NODEFAULTLIB:LIBCMT>)
 else()
   # Schedule dispatch in this project is a switch per Op mapping a schedule id to a kernel launch,
   # and a missing `return` there is close to invisible: the Op runs the intended kernel and then
