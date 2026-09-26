@@ -104,7 +104,7 @@ std::string serve_usage_text(const char* argv0) {
            "[--ngram-session-mib N] [--ngram-native-sessions] "
            "[--no-thinking] [--preserve-thinking] [--cors] [--no-webui] [--webui-mcp-proxy] "
            "[--usage-chunk-choice] "
-           "[--structured-output] "
+           "[--structured-output|--unconstrained-response-format] "
            "[--temperature F] [--top-p F] [--top-k N] [--min-p F] [--presence-penalty F] "
            "[--frequency-penalty F] [--seed N] [--greedy]\n"
            "       [--log-level trace|debug|info|warning|error|critical|off]\n"
@@ -191,7 +191,10 @@ std::string serve_usage_text(const char* argv0) {
            "       browser cannot reach them directly. http targets only; the relay reaches any\n"
            "       host it is given and carries no API key, so enable it only on a trusted bind.\n"
            "       --structured-output accepts JSON and JSON Schema response formats; it reserves "
-           "the grammar masks and adds a grammar stage to every DFlash round.\n";
+           "the grammar masks and adds a grammar stage to every DFlash round.\n"
+           "       --unconstrained-response-format, without --structured-output, generates a JSON "
+           "or JSON Schema request unconstrained instead of refusing it with 400, for clients that "
+           "always send a response format\n";
 }
 
 // "1,2,3" selects the ordered devices the model's pipeline stages run on; the first also holds the
@@ -587,6 +590,8 @@ ServeOptions parse_serve_options(int argc, char** argv) {
             options.webui_mcp_proxy = true;
         } else if (arg == "--structured-output") {
             options.structured_output = true;
+        } else if (arg == "--unconstrained-response-format") {
+            options.unconstrained_response_format = true;
         } else if (arg == "--usage-chunk-choice") {
             options.usage_chunk_choice = true;
         } else if (arg == "--temperature") {
@@ -677,6 +682,10 @@ ServeOptions parse_serve_options(int argc, char** argv) {
     }
     if (options.prefill_chunk == 0 || options.prefill_chunk % 128 != 0) {
         throw std::invalid_argument("--prefill-chunk must be a positive multiple of 128");
+    }
+    if (options.unconstrained_response_format && options.structured_output) {
+        throw std::invalid_argument(
+            "--unconstrained-response-format conflicts with --structured-output");
     }
     product::apply_default_ngram_draft_tokens(options.speculative, ngram_width_explicit);
     product::validate_speculative_cli_options(options.speculative);

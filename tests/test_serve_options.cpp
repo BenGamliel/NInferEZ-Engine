@@ -834,6 +834,16 @@ int main() {
             (void)parse({"ninfer-serve", "model.ninfer", "--vision", "--vision-offload", "yes"});
         } catch (const std::invalid_argument&) { offload_mode_rejected = true; }
         failures += check(offload_mode_rejected, "--vision-offload yes was accepted");
+        failures += check(parse({"ninfer-serve", "model.ninfer", "--unconstrained-response-format"})
+                              .unconstrained_response_format,
+                          "--unconstrained-response-format was not preserved");
+        bool unconstrained_with_structured_rejected = false;
+        try {
+            (void)parse({"ninfer-serve", "model.ninfer", "--structured-output",
+                         "--unconstrained-response-format"});
+        } catch (const std::invalid_argument&) { unconstrained_with_structured_rejected = true; }
+        failures += check(unconstrained_with_structured_rejected,
+                          "--unconstrained-response-format was accepted with --structured-output");
         const ServeOptions headroom = parse({"ninfer-serve", "model.ninfer", "--kv-capacity",
                                              "auto", "--vram-headroom-mib", "512"});
         failures += check(headroom.kv_capacity.mode == ninfer::KvCapacityMode::Automatic &&

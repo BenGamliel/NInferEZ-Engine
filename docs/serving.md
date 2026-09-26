@@ -106,7 +106,9 @@ It is opt-in: start the server with `--structured-output` (the CLI's `--json` an
 enable it for their run). That reserves one grammar mask plane per draft position and lane, and a
 DFlash or DFlash2 round then carries a host grammar stage even when no request is constrained.
 Without it the server keeps the default path unchanged and refuses a constrained request with HTTP
-400 `response_format_not_supported`.
+400 `response_format_not_supported`; with `--unconstrained-response-format` it generates such a
+request unconstrained instead, for clients that send a JSON format on every request and parse the
+answer themselves.
 
 Chat Completions accepts:
 
@@ -403,8 +405,6 @@ The endpoint supports:
   it first. Caller stop strings still apply; any other value type is rejected with 400. Output past
   the model's natural end is not meaningful text. `/v1/responses` and `/v1/messages` do not
   honor it;
-- `n:1`, text-only `modalities`, and `response_format: {"type":"text"}`;
-
 - `n:1`, text-only `modalities`, and `response_format` with `text`, `json_object`, or `json_schema`;
 - non-streaming responses and server-sent event streams;
 - `stream_options.include_usage`, optionally shaped by `--usage-chunk-choice` for strict client
@@ -1153,6 +1153,7 @@ The table lists executable defaults. The startup example selects a long-context 
 | `--no-webui` | stop serving a WebUI built in with `NINFER_WEBUI_DIR` | served when built in |
 | `--webui-mcp-proxy` | relay the WebUI's MCP traffic at `/cors-proxy` (http targets, no API key) | off |
 | `--structured-output` | accept JSON and JSON Schema response formats (see [Structured output](#structured-output)) | off |
+| `--unconstrained-response-format` | without `--structured-output`, generate a JSON or JSON Schema request unconstrained instead of refusing it | off |
 | `--thinking-budget-message TEXT` | message a thinking-enabled request receives at its thinking budget instead of the built-in notice; the canonical `</think>` close is appended when missing | built-in |
 | `--default-reasoning-effort E` | effort for requests that name none: `none`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max` | unset |
 | `--vision` | enable media input and load Vision GPU allocations | off |

@@ -361,21 +361,28 @@ PreparedRequest GenerationService::prepare(const GenerationRequest& request,
         DeadlinePolicy::ClientPendingTimeout);
 }
 
-PreparedRequest GenerationService::prepare_impl(const GenerationRequest& request,
+PreparedRequest GenerationService::prepare_impl(const GenerationRequest& incoming,
                                                 GenerationConsumerMode consumer_mode,
                                                 ninfer::GenerationObservationOptions observation,
                                                 std::function<bool()> is_cancelled,
                                                 ContextCacheHints context_cache,
                                                 CacheParticipation cache_participation,
                                                 DeadlinePolicy deadline_policy) const {
-    if (request.structured_output.kind != StructuredOutputKind::None &&
+    std::optional<GenerationRequest> unconstrained;
+    if (incoming.structured_output.kind != StructuredOutputKind::None &&
         !options_.structured_output) {
-        ApiError error;
-        error.message = "structured output requires the server to start with --structured-output";
-        error.param   = "response_format";
-        error.code    = "response_format_not_supported";
-        throw ApiException(std::move(error));
+        if (!options_.unconstrained_response_format) {
+            ApiError error;
+            error.message =
+                "structured output requires the server to start with --structured-output";
+            error.param = "response_format";
+            error.code  = "response_format_not_supported";
+            throw ApiException(std::move(error));
+        }
+        unconstrained.emplace(incoming);
+        unconstrained->structured_output = {};
     }
+    const GenerationRequest& request = unconstrained ? *unconstrained : incoming;
     PreparedRequest prepared;
     const ResolvedPromptSemantics semantics = resolve_prompt_semantics(request, options_);
     ninfer::RequestOptions request_options  = to_request_options(

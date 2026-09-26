@@ -685,6 +685,7 @@ std::string format_server_start_json(
              {"public_model_id", public_model_id},
              {"api_key_configured", !options.api_key.empty()},
              {"cors_enabled", options.enable_cors},
+             {"unconstrained_response_format", options.unconstrained_response_format},
              {"max_request_bytes", options.max_request_bytes},
              {"media_cache_bytes", options.media_cache_bytes},
              {"media_live_bytes", options.media_live_bytes},
