@@ -174,6 +174,10 @@ public:
     // What each further device reserves (device 1 first). Empty on one device.
     [[nodiscard]] std::span<const std::size_t> extra_rank_reservation_bytes() const noexcept;
     [[nodiscard]] std::size_t workspace_capacity_bytes() const noexcept;
+    // The context-cache shape this plan was frozen with. An engaged host RAM budget has already
+    // resolved the Host state slots, Host KV bytes and long-anchor count here, so a reader that
+    // reports or enforces capacity must take them from the plan rather than from raw options.
+    [[nodiscard]] const ContextCacheOptions& context_cache_options() const noexcept;
 
 public:
     // Family-private construction/storage seam; exact packages expose only the completed alias.

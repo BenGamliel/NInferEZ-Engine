@@ -213,7 +213,15 @@ struct ContextCacheOptions {
     // Host StateImages and Host KV bytes are independently configured pinned-memory capacities.
     std::uint32_t host_state_slots     = kDefaultHostStateSlots;
     std::size_t host_kv_capacity_bytes = kDefaultHostKvCapacityBytes;
-    // Bounded private/shared logical catalogs and per-continuation long-anchor count.
+    // Single host RAM ceiling for the whole retention tier. When engaged it is authoritative:
+    // the plan sizes the Host state pool from the checkpoint inventory the capture path creates
+    // (2 + anchors per private owner plus one per shared entry), spends the remaining state
+    // headroom under the half-budget cap on extra long anchors per owner, gives Host KV the
+    // remainder, and rejects a plan whose state footprint exceeds half the budget.
+    // `host_state_slots` and `host_kv_capacity_bytes` are ignored in that mode.
+    std::optional<std::size_t> host_cache_budget_bytes;
+    // Bounded private/shared logical catalogs and per-continuation long-anchor count. An engaged
+    // host-cache budget raises the anchor count within the state inventory it funds.
     std::optional<std::uint32_t> max_private_continuations;
     std::optional<std::uint32_t> max_shared_prefixes;
     std::optional<std::uint32_t> max_long_anchors_per_continuation;
@@ -1203,6 +1211,13 @@ struct MemorySummary {
     std::uint32_t host_state_occupied_slots       = 0;
     std::size_t host_kv_capacity_bytes            = 0;
     std::size_t host_kv_occupied_bytes            = 0;
+    // Host retention-tier unit costs. Every Host StateImage slot pins image_bytes regardless of
+    // the prefix depth it resumes, and Host KV pins bytes per page group, so the split of a
+    // budget between the two is the depth-versus-positions trade made visible.
+    std::size_t host_state_image_bytes   = 0;
+    std::size_t host_kv_page_group_bytes = 0;
+    // Engaged only when the single host RAM budget mode is active.
+    std::size_t host_cache_budget_bytes = 0;
 };
 
 // Worker-owned monotonic nanosecond counters. Top-level Host phases are mutually exclusive;

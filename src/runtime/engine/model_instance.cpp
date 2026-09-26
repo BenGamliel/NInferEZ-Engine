@@ -179,7 +179,8 @@ EngineOptions normalize_engine_options(EngineOptions options) {
             (cache.max_private_continuations && *cache.max_private_continuations != concurrency) ||
             (cache.max_shared_prefixes && *cache.max_shared_prefixes != 0) ||
             (cache.max_long_anchors_per_continuation &&
-             *cache.max_long_anchors_per_continuation != 0)) {
+             *cache.max_long_anchors_per_continuation != 0) ||
+            cache.host_cache_budget_bytes) {
             throw std::invalid_argument("disabled context cache accepts only root-only capacities");
         }
         cache.device_state_slots                = 0;
@@ -384,6 +385,15 @@ ConstructedModel construct_model(const EngineOptions& requested, DeviceContext& 
                             resolution.extra_rank_reservation_bytes)) {
         throw std::logic_error("resolved KV capacity does not match the finalized Program plan");
     }
+    // The plan is the one authority for the resolved context-cache shape: its Host state slots,
+    // Host KV bytes and long-anchor count may have been derived from the single host RAM budget.
+    // Publishing that shape to the options the Engine keeps — and to the frontend grid built
+    // before the plan existed — keeps the reported options, the ResourceManager and the Program
+    // on the same capacity instead of a silently divergent default.
+    EngineOptions resolved = options;
+    resolved.context_cache = sequence.context_cache_options();
+    instance->frontend.publish_long_anchor_limit(
+        resolved.context_cache.max_long_anchors_per_continuation.value_or(0));
     instance->kv_capacity_resolution = resolution;
     planning.complete();
     StartupPhaseScope program(options.startup_observer, StartupPhase::ProgramInitialize);
@@ -443,7 +453,7 @@ ConstructedModel construct_model(const EngineOptions& requested, DeviceContext& 
         metadata.weights_id += format;
     }
     return {std::move(instance), std::move(summary), std::move(metadata),
-            std::move(context_cost.model)};
+            std::move(context_cost.model), std::move(resolved)};
 }
 
 } // namespace ninfer::runtime

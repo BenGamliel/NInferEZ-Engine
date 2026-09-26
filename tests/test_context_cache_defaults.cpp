@@ -1,12 +1,61 @@
+#include "models/qwen3_5/program/planning/startup.h"
 #include "runtime/engine/model_instance.h"
 
 #include <iostream>
+#include <optional>
+#include <stdexcept>
 
 namespace {
 
 int check(bool condition, const char* message) {
     if (condition) { return 0; }
     std::cerr << message << '\n';
+    return 1;
+}
+
+// Oracle for the Host RAM budget split. Every expectation below is computed by hand from the
+// resolver's contract: one StateImage per retained position (2 + A per private owner plus one per
+// shared entry), a state footprint capped at half the budget, extra anchors bought with the
+// headroom under that cap at one image per private owner each, and a usefulness ceiling of
+// pages(capacity) / pages(buyback tokens) - 2 where one image buys back
+// state_image_bytes / host_kv_group_bytes page groups of re-prefill.
+//
+// The unit costs are round numbers on purpose: one image is 1 MiB and one Main page group is
+// 256 KiB, so the image is exactly four page groups, buyback tokens are 4 * 64 = 256, and one page
+// group is 4 logical pages. Nothing here mirrors the implementation's expression; the values are
+// the arithmetic a reader can repeat.
+constexpr std::uint64_t kImageBytes = 1ULL << 20; // 1 MiB per Host StateImage.
+constexpr std::uint64_t kGroupBytes = 1ULL << 18; // 256 KiB per Main Host KV page group.
+constexpr std::uint64_t kMiB        = 1ULL << 20;
+
+ninfer::ContextCacheOptions budgeted(std::size_t budget_mib, std::uint32_t private_capacity,
+                                     std::uint32_t shared_capacity, std::uint32_t configured,
+                                     bool automatic_anchors = true) {
+    ninfer::ContextCacheOptions cache;
+    cache.automatic_long_anchors            = automatic_anchors;
+    cache.host_cache_budget_bytes           = static_cast<std::size_t>(budget_mib * kMiB);
+    cache.max_private_continuations         = private_capacity;
+    cache.max_shared_prefixes               = shared_capacity;
+    cache.max_long_anchors_per_continuation = configured;
+    return cache;
+}
+
+void resolve(ninfer::ContextCacheOptions& cache, std::uint32_t capacity) {
+    ninfer::models::qwen3_5::detail::resolve_host_cache_budget(
+        cache, *cache.max_private_continuations, *cache.max_shared_prefixes, capacity, kImageBytes,
+        kGroupBytes);
+}
+
+int check_split(const ninfer::ContextCacheOptions& cache, std::uint32_t anchors,
+                std::uint32_t state_slots, std::uint64_t host_kv_mib, const char* message) {
+    const std::uint64_t host_kv = cache.host_kv_capacity_bytes;
+    if (*cache.max_long_anchors_per_continuation == anchors &&
+        cache.host_state_slots == state_slots && host_kv == host_kv_mib * kMiB) {
+        return 0;
+    }
+    std::cerr << message << ": anchors " << *cache.max_long_anchors_per_continuation << " (want "
+              << anchors << "), state slots " << cache.host_state_slots << " (want " << state_slots
+              << "), host KV " << host_kv << " B (want " << host_kv_mib << " MiB)\n";
     return 1;
 }
 
@@ -56,6 +105,105 @@ int main() {
         const EngineOptions normalized = normalize_engine_options(options);
         failures += check(*normalized.context_cache.max_shared_prefixes == 0,
                           "disabled context cache did not normalize shared-prefix capacity to zero");
+    }
+
+    // A comfortable budget buys anchors. 64 MiB halves to a 32 MiB state cap; the mandatory
+    // 2 + 4 per owner plus 7 shared is 19 images = 19 MiB, leaving 13 images of headroom = 6 extra
+    // anchors per owner, so A = 4 + 6 = 10 and the pool holds (2 + 10) * 2 + 7 = 31 images. The
+    // usefulness ceiling at 32768 tokens is 512 pages / 4 pages per 256 tokens - 2 = 126, far
+    // above the budget's 10, so the budget binds.
+    {
+        ninfer::ContextCacheOptions cache = budgeted(64, 2, 7, 4);
+        resolve(cache, 32768);
+        failures += check_split(cache, 10, 31, 33, "comfortable budget did not buy anchors");
+    }
+
+    // The half-budget cap is respected exactly when no shared entry competes with the per-owner
+    // images: 64 MiB / 2 is exactly (2 + 14) * 2 images of 1 MiB.
+    {
+        ninfer::ContextCacheOptions cache = budgeted(64, 2, 0, 4);
+        resolve(cache, 32768);
+        failures += check_split(cache, 14, 32, 32,
+                                "budget-funded anchors did not fill the state cap exactly");
+    }
+
+    // A budget that exactly covers the mandatory inventory buys nothing extra and still starts.
+    {
+        ninfer::ContextCacheOptions cache = budgeted(38, 2, 7, 4);
+        resolve(cache, 32768);
+        failures += check_split(cache, 4, 19, 19,
+                                "boundary budget did not keep the configured anchor count");
+    }
+
+    // A budget below the mandatory inventory falls back to the configured count and rejects, so
+    // the caller reports the real shortfall instead of an inventory the budget never funded.
+    {
+        bool rejected                     = false;
+        ninfer::ContextCacheOptions cache = budgeted(37, 2, 7, 4);
+        try {
+            resolve(cache, 32768);
+        } catch (const std::invalid_argument&) { rejected = true; }
+        failures += check(rejected, "an undersized budget did not reject the checkpoint inventory");
+    }
+
+    // An explicitly disabled anchor count stays disabled: the frontend anchors nothing, so extra
+    // anchors would only pin images nothing creates. The 11 images of endpoint, rewrite and shared
+    // inventory fit the 12 MiB half-budget and Host KV takes the rest.
+    {
+        ninfer::ContextCacheOptions cache = budgeted(64, 2, 7, 0);
+        resolve(cache, 32768);
+        failures += check_split(cache, 0, 11, 53, "an explicitly disabled anchor count was grown");
+    }
+
+    // Without automatic anchoring only client markers create anchors, so the budget keeps the
+    // configured count: (2 + 2) * 2 + 7 = 15 images, Host KV the other 49 MiB.
+    {
+        ninfer::ContextCacheOptions cache = budgeted(64, 2, 7, 2, false);
+        resolve(cache, 32768);
+        failures +=
+            check_split(cache, 2, 15, 49, "the budget grew anchors that no automatic grid creates");
+    }
+
+    // The payoff ceiling binds before the budget: at 4096 tokens the logical space holds
+    // 64 / 4 - 2 = 14 useful anchors, so a 256 MiB budget stops there and the rest stays Host KV.
+    {
+        ninfer::ContextCacheOptions cache = budgeted(256, 2, 7, 4);
+        resolve(cache, 4096);
+        failures +=
+            check_split(cache, 14, 39, 217, "the anchor payoff ceiling did not bound the budget");
+    }
+
+    // The ceiling never lowers a count the caller configured, even one above it.
+    {
+        ninfer::ContextCacheOptions cache = budgeted(256, 2, 7, 20);
+        resolve(cache, 4096);
+        failures +=
+            check_split(cache, 20, 51, 205, "the anchor payoff ceiling lowered a configured count");
+    }
+
+    // The production nvidia deployment shape: 52,000 MiB budget with the real int8 page-group
+    // (2,162,688 B) and DFlash2 StateImage (195,897,344 B) unit costs, at --max-concurrency 2
+    // (4 private continuations, 7 shared prefixes) and 240,000-token capacity. Hand oracle: the
+    // half budget is 27,262,976,000 B; the mandatory inventory at 4 anchors is 31 images =
+    // 6,072,817,664 B, leaving 108 images of headroom = 27 extra anchors, so A = 31. The payoff
+    // ceiling is pages(240000) / pages(5760 buyback tokens) - 2 = 3750 / 90 - 2 = 39, so the
+    // budget binds. The pool holds (2 + 31) * 4 + 7 = 139 images = 27,229,730,816 B of state,
+    // and Host KV gets 52000 * 2^20 - that = 27,296,221,184 B.
+    {
+        ninfer::ContextCacheOptions cache;
+        cache.host_cache_budget_bytes           = static_cast<std::size_t>(52000ULL * kMiB);
+        cache.max_private_continuations         = 4;
+        cache.max_shared_prefixes               = 7;
+        cache.max_long_anchors_per_continuation = 4;
+        cache.automatic_long_anchors            = true;
+        ninfer::models::qwen3_5::detail::resolve_host_cache_budget(
+            cache, *cache.max_private_continuations, *cache.max_shared_prefixes, 240000,
+            195897344ULL, 2162688ULL);
+        failures += check(
+            *cache.max_long_anchors_per_continuation == 31 && cache.host_state_slots == 139 &&
+                cache.host_kv_capacity_bytes == 27296221184ULL,
+            "production budget did not resolve to the hand-computed 31 anchors / 139 images / "
+            "27,296,221,184 B Host KV split");
     }
 
     if (failures == 0) { std::cout << "ok\n"; }

@@ -163,6 +163,11 @@ std::string serve_usage_text(const char* argv0) {
            "                                active lanes (default max-concurrency)\n"
            "  --host-state-slots N          pinned host checkpoint states (default 8)\n"
            "  --host-kv-mib N               pinned host KV in MiB (default 8192)\n"
+           "  --host-cache-mib N            one pinned host RAM ceiling instead of the two\n"
+           "                                above: host states for every checkpoint the\n"
+           "                                capture path creates (at most half), more\n"
+           "                                automatic anchors with the headroom, host KV the\n"
+           "                                rest\n"
            "  --max-private-continuations N private continuation catalog (default 2x\n"
            "                                max-concurrency)\n"
            "  --max-shared-prefixes N       shared stable-prefix catalog (default\n"
@@ -399,6 +404,9 @@ ServeOptions parse_serve_options(int argc, char** argv) {
     bool kv_capacity_explicit         = false;
     bool device_explicit              = false;
     bool context_capacity_explicit    = false;
+    bool host_state_slots_explicit    = false;
+    bool host_kv_mib_explicit         = false;
+    bool host_cache_budget_explicit   = false;
     bool long_anchor_spacing_explicit = false;
     bool ngram_width_explicit         = false;
     std::optional<std::size_t> kv_headroom_mib;
@@ -527,6 +535,7 @@ ServeOptions parse_serve_options(int argc, char** argv) {
             options.context_cache.host_state_slots = static_cast<std::uint32_t>(
                 parse_nonnegative_int(require_value("--host-state-slots"), "host-state-slots"));
             context_capacity_explicit = true;
+            host_state_slots_explicit = true;
         } else if (arg == "--host-kv-mib") {
             const std::uint64_t mib = parse_u64(require_value("--host-kv-mib"), "host-kv-mib");
             if (mib > std::numeric_limits<std::size_t>::max() / (1ULL << 20)) {
@@ -534,6 +543,16 @@ ServeOptions parse_serve_options(int argc, char** argv) {
             }
             options.context_cache.host_kv_capacity_bytes = static_cast<std::size_t>(mib << 20);
             context_capacity_explicit                    = true;
+            host_kv_mib_explicit                         = true;
+        } else if (arg == "--host-cache-mib") {
+            const std::uint64_t mib =
+                parse_u64(require_value("--host-cache-mib"), "host-cache-mib");
+            if (mib > std::numeric_limits<std::size_t>::max() / (1ULL << 20)) {
+                throw std::invalid_argument("--host-cache-mib is out of range");
+            }
+            options.context_cache.host_cache_budget_bytes = static_cast<std::size_t>(mib << 20);
+            context_capacity_explicit                     = true;
+            host_cache_budget_explicit                    = true;
         } else if (arg == "--disk-kv-path") {
             options.context_cache.disk_kv_path = require_value("--disk-kv-path");
             if (options.context_cache.disk_kv_path.empty()) {
@@ -844,6 +863,16 @@ ServeOptions parse_serve_options(int argc, char** argv) {
     }
     if (!options.stage_layers.empty() && options.devices.size() < 2) {
         throw std::invalid_argument("--stage-layers needs --devices naming more than one device");
+    }
+    if (host_cache_budget_explicit) {
+        // The budget is the one host RAM ceiling; the two component flags would silently
+        // fight it, and their independent-allocation semantics are exactly what the budget
+        // exists to replace.
+        if (host_state_slots_explicit || host_kv_mib_explicit) {
+            throw std::invalid_argument(
+                "--host-cache-mib cannot be combined with --host-state-slots or --host-kv-mib: "
+                "the budget derives both Host state slots and Host KV bytes");
+        }
     }
     if (options.port <= 0 || options.port > 65535) {
         throw std::invalid_argument("--port must be in [1,65535]");

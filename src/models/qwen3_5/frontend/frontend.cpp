@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cctype>
 #include <cstddef>
@@ -720,7 +721,10 @@ public:
     std::vector<TokenId> ngram_boundaries;
     bool vision_enabled                          = true;
     std::uint32_t max_context                    = 0;
-    std::uint32_t automatic_long_anchors         = 0;
+    // Startup-fixed, published once through Frontend::publish_long_anchor_limit while the Engine
+    // is still single-threaded; atomic so the request threads that read it see the published value
+    // without a data race on a const shared implementation.
+    mutable std::atomic<std::uint32_t> automatic_long_anchors{0};
     std::uint32_t long_anchor_min_spacing_tokens = 0;
 };
 
@@ -781,6 +785,12 @@ Frontend::~Frontend()                              = default;
 
 const ModelSamplingDefaults& Frontend::sampling_defaults() const noexcept {
     return impl_->sampling;
+}
+
+void Frontend::publish_long_anchor_limit(std::uint32_t anchors) noexcept {
+    // Only a frontend that anchors automatically offers the grid the resolved count sizes.
+    if (impl_->automatic_long_anchors.load(std::memory_order_relaxed) == 0) { return; }
+    impl_->automatic_long_anchors.store(anchors, std::memory_order_relaxed);
 }
 
 Frontend make_frontend(const FrontendResources& resources, FrontendOptions options) {
@@ -1008,7 +1018,8 @@ PreparedPrompt Frontend::prepare(PromptInput input, const PreparationControl& co
     result.context_cache     = prepare_context_cache(
         std::move(cache_hints), message_count, message_boundaries, rendered_markers,
         cache_boundaries, result.vision_items, engine_tool_marker_index, leading_boundary,
-        checked_token_count(result.token_ids.size()), impl_->automatic_long_anchors,
+        checked_token_count(result.token_ids.size()),
+        impl_->automatic_long_anchors.load(std::memory_order_relaxed),
         impl_->long_anchor_min_spacing_tokens);
     result.prepare.seconds = std::chrono::duration<double>(Clock::now() - start).count();
     return PreparedPrompt(std::move(prepared));

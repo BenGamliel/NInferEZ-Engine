@@ -507,15 +507,27 @@ void OperationalLog::engine_capacity(const GenerationService& service) const {
         // Report what was actually pinned, not what was requested: on Windows the host KV cache
         // is clamped against free VRAM at startup (program_impl.h), and can land at zero while
         // `cache.host_kv_capacity_bytes` still holds the pre-clamp --host-kv-mib target. The
-        // memory summary is captured after that clamp runs, so it carries the true figure.
+        // memory summary is captured after that clamp runs, so it carries the true figure, and an
+        // engaged host-cache budget has already resolved the Host state and anchor counts.
         logger_->info(
             "context cache | {} active + {} cached device states | host {} states, {} KV | "
             "private {} | shared {} | anchors {}{}",
-            engine.max_concurrency, *cache.device_state_slots, cache.host_state_slots,
+            engine.max_concurrency, *cache.device_state_slots,
+            product::format_pretty_count(memory.host_state_capacity_slots),
             product::format_pretty_bytes(memory.host_kv_capacity_bytes),
             *cache.max_private_continuations, *cache.max_shared_prefixes,
             *cache.max_long_anchors_per_continuation,
             cache.automatic_long_anchors ? " automatic" : "");
+        if (memory.host_cache_budget_bytes != 0) {
+            // Both unit costs and the count the budget bought, so an operator can check the split
+            // against the RAM they granted rather than reconstruct it from the slot count.
+            logger_->info("host cache budget | {} total | {} per state image | {} per host KV "
+                          "page group | {} anchors per continuation | state capped at half",
+                          product::format_pretty_bytes(memory.host_cache_budget_bytes),
+                          product::format_pretty_bytes(memory.host_state_image_bytes),
+                          product::format_pretty_bytes(memory.host_kv_page_group_bytes),
+                          *cache.max_long_anchors_per_continuation);
+        }
     } else {
         logger_->info("context cache | root only");
     }
