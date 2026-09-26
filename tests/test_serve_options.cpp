@@ -344,9 +344,14 @@ int main() {
                                   "default"})
                                .context_cache.rolling_retention,
                       "the rolling retention policy did not reach serving options");
+    failures += check(!defaults.context_cache.release_diverged_checkpoints &&
+                          parse({"ninfer-serve", "model.ninfer", "--release-diverged-checkpoints"})
+                              .context_cache.release_diverged_checkpoints,
+                      "--release-diverged-checkpoints did not reach serving options");
     for (const auto& invalid : std::vector<std::vector<std::string>>{
              {"--context-cache-policy", "lru"},
              {"--context-cache-policy", "rolling", "--no-prefix-reuse"},
+             {"--release-diverged-checkpoints", "--no-prefix-reuse"},
              {"--disk-kv-restore"},
              {"--disk-kv-directstorage"},
              {"--disk-kv-gib", "8"},

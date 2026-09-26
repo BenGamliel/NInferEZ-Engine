@@ -85,6 +85,9 @@ public:
             throw std::logic_error("target admission capacity does not match the Engine");
         }
         if (options.context_cache.rolling_retention) { resources_.enable_rolling_retention(); }
+        if (options.context_cache.release_diverged_checkpoints) {
+            resources_.enable_diverged_checkpoint_release();
+        }
         std::promise<void> startup;
         std::future<void> started = startup.get_future();
         worker_                   = std::thread([this, startup = std::move(startup)]() mutable {

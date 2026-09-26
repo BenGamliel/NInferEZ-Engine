@@ -171,7 +171,8 @@ EngineOptions normalize_engine_options(EngineOptions options) {
         cache.disk_kv_path.clear();
         cache.disk_kv_restore       = false;
         cache.disk_kv_directstorage = false;
-        cache.rolling_retention     = false;
+        cache.rolling_retention            = false;
+        cache.release_diverged_checkpoints = false;
         return options;
     }
 

@@ -1191,6 +1191,9 @@ public:
     // See ContextCacheOptions::rolling_retention.
     void enable_rolling_retention() noexcept { rolling_retention_ = true; }
 
+    // See ContextCacheOptions::release_diverged_checkpoints.
+    void enable_diverged_checkpoint_release() noexcept { release_diverged_checkpoints_ = true; }
+
     [[nodiscard]] CatalogState catalog_state(std::uint32_t slot) const noexcept {
         return slot < catalog_count_ ? catalog_[slot].state : CatalogState::Vacant;
     }
@@ -1480,6 +1483,23 @@ private:
             }
         }
         return mask;
+    }
+
+    // A private checkpoint is provably dead only for its own lineage: when the incoming request
+    // continues the same session and its prompt differs from the checkpoint's prefix at that
+    // frontier, no later prompt of that conversation can reuse it. A checkpoint that merely
+    // cannot serve this request -- another conversation's, a shared prefix, or one this prompt
+    // does not reach -- keeps its full portfolio value: its demand comes from other requests.
+    [[nodiscard]] bool lineage_diverged(const RequestBasePlan& base,
+                                        const std::optional<CacheSessionKey>& owner_session,
+                                        const PrefixShortlistKey& key) const {
+        if (!release_diverged_checkpoints_) { return false; }
+        const std::optional<CacheSessionKey>& incoming_session = base.context_cache().session_key;
+        if (!owner_session || !incoming_session || *owner_session != *incoming_session) {
+            return false;
+        }
+        const std::optional<PrefixShortlistKey> incoming = base.prefix_shortlist_key(key.frontier);
+        return incoming && *incoming != key;
     }
 
     [[nodiscard]] std::uint64_t
@@ -1871,7 +1891,8 @@ private:
         projected_owners.reserve(catalog_count_ + shared_catalog_count_ + shared_candidates.size());
         projected_checkpoints.reserve(prefix_index_.size() + shared_candidates.size());
         const auto append_existing = [&](PlanningOwnerId owner, const auto& handle,
-                                         const auto& checkpoint) {
+                                         const auto& checkpoint,
+                                         const std::optional<CacheSessionKey>& owner_session) {
             const std::uint64_t rebuild  = cost_model_.prefill_ns(checkpoint.rebuild_work);
             const std::uint64_t recovery = price_checkpoint_recovery_work(
                 cost_model_, program.checkpoint_recovery_work(handle, checkpoint.ref));
@@ -1881,6 +1902,7 @@ private:
                 .rebuild_ns  = rebuild,
                 .baseline_recovery_ns = recovery,
                 .target_recovery_ns   = recovery,
+                .unreachable = lineage_diverged(base, owner_session, checkpoint.shortlist_key),
             });
         };
         for (std::uint32_t slot = 0; slot < catalog_count_; ++slot) {
@@ -1897,13 +1919,13 @@ private:
                 .private_retention_weight = private_retention_weight(entry.retention),
             });
             if (entry.summary.endpoint) {
-                append_existing(owner, *entry.handle, *entry.summary.endpoint);
+                append_existing(owner, *entry.handle, *entry.summary.endpoint, entry.session);
             }
             if (entry.summary.rewrite) {
-                append_existing(owner, *entry.handle, *entry.summary.rewrite);
+                append_existing(owner, *entry.handle, *entry.summary.rewrite, entry.session);
             }
             for (const auto& checkpoint : entry.summary.long_anchors) {
-                append_existing(owner, *entry.handle, checkpoint);
+                append_existing(owner, *entry.handle, checkpoint, entry.session);
             }
         }
         for (std::uint32_t slot = 0; slot < shared_catalog_count_; ++slot) {
@@ -1914,7 +1936,9 @@ private:
                 .owner                  = owner,
                 .explicit_shared_credit = entry.explicit_credit,
             });
-            append_existing(owner, *entry.handle, entry.summary.checkpoint);
+            // A shared prefix serves many lineages, so one request diverging from it proves
+            // nothing about its future demand.
+            append_existing(owner, *entry.handle, entry.summary.checkpoint, std::nullopt);
         }
 
         std::vector<std::uint32_t> selected_frontiers;
@@ -2071,6 +2095,8 @@ private:
                         .baseline_recovery_ns = price_checkpoint_recovery_work(
                             cost_model_,
                             program.checkpoint_recovery_work(*entry.handle, checkpoint.ref)),
+                        .unreachable =
+                            lineage_diverged(base, entry.session, checkpoint.shortlist_key),
                     });
                 };
                 if (entry.summary.endpoint) { append_checkpoint(*entry.summary.endpoint); }
@@ -3539,6 +3565,7 @@ private:
     std::uint32_t shared_catalog_count_ = 0;
     bool cache_enabled_                 = true;
     bool rolling_retention_             = false;
+    bool release_diverged_checkpoints_  = false;
     std::array<LogicalLaneState, kMaximumConcurrency> lanes_{};
     std::vector<CatalogEntry> catalog_;
     std::vector<SharedCatalogEntry> shared_catalog_;

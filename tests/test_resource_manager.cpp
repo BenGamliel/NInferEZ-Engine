@@ -1893,6 +1893,36 @@ void test_private_portfolio_loss_keeps_checkpoint_identity_fixed() {
             "a surviving endpoint masked loss of an earlier private checkpoint");
 }
 
+void test_unreachable_checkpoint_carries_no_value() {
+    using ninfer::runtime::ContextPortfolioCheckpointValue;
+    using ninfer::runtime::ContextPortfolioOwnerPolicy;
+    using ninfer::runtime::ContextPortfolioValue;
+
+    const std::array owners{
+        ContextPortfolioOwnerPolicy{.owner                    = PlanningOwnerId{.value = 0},
+                                    .private_retention_weight = 4},
+    };
+    for (const bool unreachable : {false, true}) {
+        const std::array checkpoints{
+            ContextPortfolioCheckpointValue{
+                .owner                = PlanningOwnerId{.value = 0},
+                .demand_mask          = 1,
+                .rebuild_ns           = 1000,
+                .baseline_recovery_ns = 100,
+                .target_recovery_ns   = 800,
+                .unreachable          = unreachable,
+            },
+        };
+        ContextPortfolioValue value;
+        const auto result = value.fold(owners, checkpoints);
+        const bool valued = result.baseline_public_value != 0 || result.target_public_value != 0 ||
+                            result.private_transition_loss != 0;
+        require(valued != unreachable,
+                unreachable ? "a checkpoint its own lineage diverged from still carried value"
+                            : "a reachable checkpoint lost its value");
+    }
+}
+
 void test_portfolio_demand_and_owner_aggregation() {
     using ninfer::runtime::ContextPortfolioCheckpointValue;
     using ninfer::runtime::ContextPortfolioOwnerPolicy;
@@ -3780,6 +3810,8 @@ int main() {
              test_publication_only_pressure_constructs_adoptable_target);
     run_test("private checkpoint identity loss",
              test_private_portfolio_loss_keeps_checkpoint_identity_fixed);
+    run_test("unreachable checkpoint carries no value",
+             test_unreachable_checkpoint_carries_no_value);
     run_test("portfolio demand and owner aggregation", test_portfolio_demand_and_owner_aggregation);
     run_test("shared capture private transition loss",
              test_shared_capture_subtracts_private_transition_loss);

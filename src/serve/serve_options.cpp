@@ -86,7 +86,7 @@ std::string serve_usage_text(const char* argv0) {
            "[--max-long-anchors-per-continuation N] [--max-cache-markers-per-request N] "
            "[--disk-kv-path DIR] [--disk-kv-gib N] [--disk-kv-restore] [--disk-kv-directstorage] "
            "[--first-token-logprobs] "
-           "[--context-cache-policy default|rolling] "
+           "[--context-cache-policy default|rolling] [--release-diverged-checkpoints] "
            "[--request-log-jsonl FILE] "
            "[--response-store-max-records N] [--response-store-max-mib N] "
            "[--kv-dtype bf16|int8|fp8|rk8v4|rk4v4|rk4v4-e8|rk2v4-e8|nvfp4|k8v4] "
@@ -160,6 +160,8 @@ std::string serve_usage_text(const char* argv0) {
            "and reports the first generated token's log probability with its alternatives\n"
            "       --context-cache-policy rolling lets a capture that extends a resident "
            "checkpoint inherit its demand, for one conversation whose prompt only grows\n"
+           "       --release-diverged-checkpoints values nothing a conversation's own private "
+           "checkpoint that its next prompt diverges from, so that checkpoint goes first\n"
            "       --default-thinking-budget caps model-origin thinking for enabled requests; "
            "control tokens count toward the request output limit\n"
            "       --thinking-budget-message replaces the end-of-thinking notice a request gets "
@@ -383,6 +385,9 @@ ServeOptions parse_serve_options(int argc, char** argv) {
             }
             options.context_cache.rolling_retention = policy == "rolling";
             context_capacity_explicit               = true;
+        } else if (arg == "--release-diverged-checkpoints") {
+            options.context_cache.release_diverged_checkpoints = true;
+            context_capacity_explicit                          = true;
         } else if (arg == "--max-private-continuations") {
             options.context_cache.max_private_continuations =
                 static_cast<std::uint32_t>(parse_nonnegative_int(

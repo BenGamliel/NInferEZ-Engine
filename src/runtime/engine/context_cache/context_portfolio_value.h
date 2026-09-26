@@ -26,6 +26,10 @@ struct ContextPortfolioCheckpointValue {
     std::uint64_t rebuild_ns           = 0;
     std::uint64_t baseline_recovery_ns = 0;
     std::uint64_t target_recovery_ns   = 0;
+    // The incoming request continues this checkpoint's own lineage (same session) and diverges
+    // from it, so no later prompt of that conversation can reuse it. Only then is it worth
+    // nothing; a checkpoint that merely cannot serve this request keeps its value.
+    bool unreachable = false;
 };
 
 struct ContextPortfolioValueResult {
@@ -61,6 +65,7 @@ public:
         }
 
         for (const ContextPortfolioCheckpointValue& checkpoint : checkpoints) {
+            if (checkpoint.unreachable) { continue; }
             const auto owner = std::find_if(
                 owner_scratch_.begin(), owner_scratch_.end(),
                 [&](const OwnerValue& item) { return item.owner == checkpoint.owner; });

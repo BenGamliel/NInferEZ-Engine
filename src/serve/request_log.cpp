@@ -753,7 +753,8 @@ std::string format_server_start_json(
                    {"max_long_anchors_per_continuation",
                     cache.max_long_anchors_per_continuation.value()},
                    {"max_cache_markers_per_request", cache.max_cache_markers_per_request.value()},
-                   {"rolling_retention", cache.rolling_retention}}}};
+                   {"rolling_retention", cache.rolling_retention},
+                   {"release_diverged_checkpoints", cache.release_diverged_checkpoints}}}};
     record["sampling_defaults"] =
         Json{{"thinking", preset_json(sampling_defaults.thinking)},
              {"non_thinking", preset_json(sampling_defaults.non_thinking)},

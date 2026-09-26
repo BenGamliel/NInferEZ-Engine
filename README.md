@@ -239,6 +239,9 @@ From other forks:
   (IMGillusion).
 - **Rolling retention.** `--context-cache-policy rolling` lets one long conversation keep rolling
   its cached frontier forward (IMGillusion).
+- **Diverged-branch release.** `--release-diverged-checkpoints` lets the cache drop first a private
+  checkpoint that its own conversation has moved away from (Ian Ranson, after pkochubey's upstream
+  PR #300).
 - **NVFP4 expert banks on Blackwell** (upstream PRs #286-#290 by Mykhailo Dementii). The published
   Qwen3.6-35B-A3B NVFP4 checkpoint converts with `--recipe qwen3_6_35b_a3b_nvfp4` and runs on any
   `120a` build: on an RTX 5090 (native build, `-DNINFER_SM120_NATIVE=ON`) the 20.6 GB text

@@ -206,6 +206,11 @@ struct ContextCacheOptions {
     // default: when conversations share a prefix, one conversation's extension can evict the
     // prefix the others depend on.
     bool rolling_retention = false;
+    // A private checkpoint of a conversation whose next prompt diverges from it at the checkpoint's
+    // frontier keeps no retention value, so it is the first to go when the cache needs room. Off
+    // by default: a client that switches back to an earlier branch of the conversation, or another
+    // conversation that shares that prefix, could still have reused it.
+    bool release_diverged_checkpoints = false;
 };
 
 struct ContextCostOptions {
