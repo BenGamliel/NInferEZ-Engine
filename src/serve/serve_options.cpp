@@ -290,11 +290,11 @@ ServeOptions parse_serve_options(int argc, char** argv) {
         } else if (arg == "--kv-capacity") {
             options.kv_capacity  = parse_kv_capacity(require_value("--kv-capacity"));
             kv_capacity_explicit = true;
-        } else if (arg == "--kv-headroom-mib") {
-            const std::uint64_t mib =
-                parse_u64(require_value("--kv-headroom-mib"), "kv-headroom-mib");
+        } else if (arg == "--kv-headroom-mib" || arg == "--vram-headroom-mib") {
+            // --vram-headroom-mib is the Wallawalla47 fork's name for the same headroom.
+            const std::uint64_t mib = parse_u64(require_value(arg.c_str()), arg.c_str() + 2);
             if (mib > std::numeric_limits<std::size_t>::max() / (1ULL << 20)) {
-                throw std::invalid_argument("--kv-headroom-mib is out of range");
+                throw std::invalid_argument(arg + " is out of range");
             }
             kv_headroom_mib = static_cast<std::size_t>(mib);
         } else if (arg == "--max-concurrency") {
@@ -508,6 +508,16 @@ ServeOptions parse_serve_options(int argc, char** argv) {
                 options.vision_residency = VisionResidency::Overlay;
             } else {
                 throw std::invalid_argument("--vision-residency must be resident or overlay");
+            }
+        } else if (arg == "--vision-offload") {
+            // The Wallawalla47 fork's switch for the same overlay residency.
+            const std::string_view mode = require_value("--vision-offload");
+            if (mode == "off") {
+                options.vision_residency = VisionResidency::Resident;
+            } else if (mode == "on") {
+                options.vision_residency = VisionResidency::Overlay;
+            } else {
+                throw std::invalid_argument("--vision-offload must be on or off");
             }
         } else if (arg == "--vision-max-merged") {
             const std::uint64_t merged =

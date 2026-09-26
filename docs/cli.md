@@ -230,6 +230,7 @@ The table lists executable defaults. The examples above select FP8 KV and MTP3.
 |---|---|---:|
 | `--max-context N` | per-sequence logical context ceiling | `2048` |
 | `--kv-capacity N\|auto` | explicit shared Main Text KV capacity, or maximize it from remaining GPU memory; omitted means `--max-context` | `2048` |
+| `--kv-headroom-mib N` | device memory in MiB that `--kv-capacity auto` leaves free after sizing the KV pool; requires `auto`. `--vram-headroom-mib` is accepted as an alias | `1024` |
 | `--prefill-chunk N` | positive text-prefill chunk, in multiples of 128 | `1024` |
 | `--max-new N` | requested output-token limit | `128` |
 | `--device N` | CUDA device index | `0` |
@@ -245,7 +246,7 @@ The table lists executable defaults. The examples above select FP8 KV and MTP3.
 | `--prefill-cublas` | hand wide prefill GEMMs to cuBLAS: a large prefill speedup for a small perplexity cost, and it wants a larger `--prefill-chunk` to pay (see [performance](performance.md)) | off |
 | `--no-prefill-cublas-projections` | with `--prefill-cublas`, keep the attention and GDN input projections off that route | projections on |
 | `--vision` | enable image/video input and load Vision GPU allocations | off |
-| `--vision-residency resident\|overlay` | `overlay` keeps the Vision tower host-pinned and borrows device memory per image from the evictable text weight tail (no resident Vision cost; needs CUDA VMM) | `resident` |
+| `--vision-residency resident\|overlay` | `overlay` keeps the Vision tower host-pinned and borrows device memory per image from the evictable text weight tail (no resident Vision cost; needs CUDA VMM). `--vision-offload on\|off` is accepted as an alias for `overlay\|resident` | `resident` |
 | `--vision-max-merged N` | merged-token budget of one media item; larger media downscales at preprocessing | 16384 |
 | `--no-cuda-graph` | disable CUDA Graph decode | graphs on |
 | `--chat-template FILE` | use a local Jinja template | artifact template |

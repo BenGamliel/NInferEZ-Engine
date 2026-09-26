@@ -99,6 +99,21 @@ int run_tests() {
                                        "--thinking-budget", "8", "--no-thinking"});
                       }),
                       "--thinking-budget was accepted with --no-thinking");
+    failures += check(parse({"ninfer-cli", "model.ninfer", "--prompt", "x", "--vision",
+                             "--vision-offload", "on"})
+                              .vision_residency == ninfer::VisionResidency::Overlay,
+                      "--vision-offload on is not an alias of overlay residency");
+    failures += check(rejects([] {
+                          (void)parse({"ninfer-cli", "model.ninfer", "--prompt", "x", "--vision",
+                                       "--vision-offload", "maybe"});
+                      }),
+                      "--vision-offload maybe was accepted");
+    const ninfer::cli::Options headroom = parse({"ninfer-cli", "model.ninfer", "--prompt", "x",
+                                                 "--kv-capacity", "auto", "--vram-headroom-mib",
+                                                 "256"});
+    failures += check(headroom.kv_capacity.mode == ninfer::KvCapacityMode::Automatic &&
+                          headroom.kv_capacity.automatic_headroom_bytes == (256ULL << 20),
+                      "--vram-headroom-mib is not an alias of --kv-headroom-mib");
     const ninfer::cli::Options with_effort =
         parse({"ninfer-cli", "model.ninfer", "--prompt", "hello", "--thinking-budget", "8",
                "--reasoning-effort", "medium"});

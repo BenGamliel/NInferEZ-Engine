@@ -821,6 +821,24 @@ int main() {
                 {"ninfer-serve", "model.ninfer", "--vision", "--vision-residency", "sometimes"});
         } catch (const std::invalid_argument&) { unknown_mode_rejected = true; }
         failures += check(unknown_mode_rejected, "--vision-residency sometimes was accepted");
+        failures += check(parse({"ninfer-serve", "model.ninfer", "--vision", "--vision-offload",
+                                 "on"})
+                                  .vision_residency == ninfer::VisionResidency::Overlay,
+                          "--vision-offload on is not an alias of overlay residency");
+        failures += check(parse({"ninfer-serve", "model.ninfer", "--vision", "--vision-residency",
+                                 "overlay", "--vision-offload", "off"})
+                                  .vision_residency == ninfer::VisionResidency::Resident,
+                          "--vision-offload off is not an alias of resident residency");
+        bool offload_mode_rejected = false;
+        try {
+            (void)parse({"ninfer-serve", "model.ninfer", "--vision", "--vision-offload", "yes"});
+        } catch (const std::invalid_argument&) { offload_mode_rejected = true; }
+        failures += check(offload_mode_rejected, "--vision-offload yes was accepted");
+        const ServeOptions headroom = parse({"ninfer-serve", "model.ninfer", "--kv-capacity",
+                                             "auto", "--vram-headroom-mib", "512"});
+        failures += check(headroom.kv_capacity.mode == ninfer::KvCapacityMode::Automatic &&
+                              headroom.kv_capacity.automatic_headroom_bytes == (512ULL << 20),
+                          "--vram-headroom-mib is not an alias of --kv-headroom-mib");
     }
 
     return failures == 0 ? 0 : 1;
