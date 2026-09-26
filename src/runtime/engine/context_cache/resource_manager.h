@@ -1042,6 +1042,74 @@ public:
         return ActiveCaptureReserveResult::Reserved;
     }
 
+    // Gives Device KV back to an active sequence whose lease ran out of pool space, so a live
+    // answer is not cut short while retained cache holds the pool. Releases idle retained owners
+    // (catalogued, no active reuse edge, no open context transaction, no explicit client credit),
+    // least recently used first over one private-and-shared recency order, skipping owners that
+    // hold no Device pages of a pool still short. Stops once the requested pages are covered or
+    // no eligible owner remains. Returns the owners released.
+    std::uint32_t reclaim_device_kv_for_lease(Program& program, std::uint32_t main_pages,
+                                              std::uint32_t backend_pages) {
+        if (!std::holds_alternative<std::monostate>(transaction_)) { return 0; }
+        std::uint64_t freed_main    = 0;
+        std::uint64_t freed_backend = 0;
+        std::uint32_t released      = 0;
+        while (freed_main < main_pages || freed_backend < backend_pages) {
+            const bool need_main    = freed_main < main_pages;
+            const bool need_backend = freed_backend < backend_pages;
+
+            struct Victim {
+                bool shared           = false;
+                std::uint32_t slot    = 0;
+                std::uint32_t main    = 0;
+                std::uint32_t backend = 0;
+            };
+
+            std::optional<Victim> victim;
+            std::tuple<std::uint64_t, std::uint64_t> oldest{
+                std::numeric_limits<std::uint64_t>::max(),
+                std::numeric_limits<std::uint64_t>::max()};
+            const auto consider = [&](bool shared, std::uint32_t slot, std::uint64_t recency,
+                                      std::uint64_t id, auto pages) {
+                if (!((need_main && pages.main != 0) || (need_backend && pages.backend != 0))) {
+                    return;
+                }
+                const std::tuple<std::uint64_t, std::uint64_t> key{recency, id};
+                if (key < oldest) {
+                    oldest = key;
+                    victim = Victim{.shared  = shared,
+                                    .slot    = slot,
+                                    .main    = pages.main,
+                                    .backend = pages.backend};
+                }
+            };
+            for (std::uint32_t slot = 0; slot < catalog_count_; ++slot) {
+                const CatalogEntry& entry = catalog_[slot];
+                if (entry.state != CatalogState::Catalogued || !entry.handle ||
+                    private_has_active_edge(slot)) {
+                    continue;
+                }
+                consider(false, slot, owner_recency_epoch(entry), entry.id,
+                         program.retained_device_kv_pages(*entry.handle));
+            }
+            for (std::uint32_t slot = 0; slot < shared_catalog_count_; ++slot) {
+                const SharedCatalogEntry& entry = shared_catalog_[slot];
+                if (!shared_automatic_reclaimable(entry, slot)) { continue; }
+                consider(true, slot, shared_recency_epoch(entry), entry.id,
+                         program.retained_device_kv_pages(*entry.handle));
+            }
+            if (!victim) { break; }
+            const bool evicted = victim->shared
+                                     ? reclaim_automatic_shared_prefix(program, victim->slot)
+                                     : release_private_owner(program, victim->slot);
+            if (!evicted) { break; }
+            freed_main += victim->main;
+            freed_backend += victim->backend;
+            ++released;
+        }
+        return released;
+    }
+
     void mark_terminal_pending(LaneId lane) {
         require_lane(lane, LogicalLaneState::Active);
         lanes_[lane.value] = LogicalLaneState::TerminalPending;
@@ -1075,6 +1143,7 @@ public:
         if (publication.session && active.update_session_index) {
             if (!publish_session(*publication.session, active.publication_slot, publication.id,
                                  publication.revision, active.publication_order)) {
+                rank_superseded_publication(publication, *publication.session);
                 publication.session.reset();
             }
         }
@@ -1155,6 +1224,7 @@ public:
         if (publication.session && active.update_session_index) {
             if (!publish_session(*publication.session, active.publication_slot, publication.id,
                                  publication.revision, active.publication_order)) {
+                rank_superseded_publication(publication, *publication.session);
                 publication.session.reset();
                 publication.retention = RetentionClass::RecentPrivate;
             }
@@ -1277,6 +1347,8 @@ public:
         out.host_state_occupied_slots        = usage.host_state_slots;
         out.device_main_kv_occupied_pages    = usage.device_main_kv_pages;
         out.device_backend_kv_occupied_pages = usage.device_backend_kv_pages;
+        out.device_main_kv_lease_pages       = usage.device_main_kv_lease_pages;
+        out.device_backend_kv_lease_pages    = usage.device_backend_kv_lease_pages;
         out.host_kv_occupied_bytes           = usage.host_kv_bytes;
         std::uint64_t shared_references      = 0;
         for (std::uint32_t lane = 0; lane < lane_count_; ++lane) {
@@ -1871,6 +1943,24 @@ private:
         clear_shared_entry(entry);
         rebuild_prefix_index();
         saturating_increment(context_stats_.pressure_shared_owners_evicted);
+        return true;
+    }
+
+    // Releases the idle private continuation in `slot` through the Program and forgets it.
+    bool release_private_owner(Program& program, std::uint32_t slot) {
+        CatalogEntry& entry = catalog_[slot];
+        if (entry.state != CatalogState::Catalogued || !entry.handle ||
+            private_has_active_edge(slot)) {
+            return false;
+        }
+        const std::uint32_t checkpoints = continuation_checkpoint_count(entry.summary);
+        const auto released             = program.release_continuation(std::move(*entry.handle));
+        if (released.status != ConsumeStatus::Consumed) { return false; }
+        erase_session_if_owner(entry.id);
+        clear_catalog_entry(entry);
+        rebuild_prefix_index();
+        saturating_increment(context_stats_.pressure_private_owners_evicted);
+        record_checkpoint_drops(context_stats_, checkpoints);
         return true;
     }
 
@@ -3716,6 +3806,23 @@ private:
             demote_replaced_session(*previous, slot, owner_id);
         }
         return true;
+    }
+
+    // A turn that finishes after a later-submitted turn of its session already holds the session
+    // binding is a stale branch: publishing last does not make it the conversation's future. It
+    // ranks just below the binding that superseded it, so pressure takes it first
+    // instead of the session's current continuation.
+    void rank_superseded_publication(CatalogEntry& publication,
+                                     const CacheSessionKey& key) noexcept {
+        const std::optional<std::size_t> cell = find_session_cell(key);
+        if (!cell) { return; }
+        const SessionIndexEntry& binding = session_index_[*cell];
+        if (binding.slot >= catalog_count_) { return; }
+        const CatalogEntry& bound = catalog_[binding.slot];
+        if (bound.state != CatalogState::Catalogued || bound.id != binding.owner_id) { return; }
+        const std::uint64_t superseding = owner_recency_epoch(bound);
+        publication.last_touch_epoch =
+            std::min(publication.last_touch_epoch, superseding == 0 ? 0 : superseding - 1U);
     }
 
     void demote_replaced_session(const SessionIndexEntry& previous, std::uint32_t replacement_slot,

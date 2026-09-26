@@ -199,6 +199,9 @@ std::string serve_usage_text(const char* argv0) {
            "  --recency-eviction            under pressure give up the least recently used\n"
            "                                owners first, only as many as needed, and demote\n"
            "                                kept ones to Host\n"
+           "  --kv-lease-growth             reserve a 4096-token output window and extend it\n"
+           "                                instead of the whole max_tokens budget; an answer\n"
+           "                                the pool cannot extend ends with length\n"
            "  --concurrent-prefill          admit waiting requests to free lanes while other\n"
            "                                requests prefill\n"
            "  --disk-kv-path DIR            disk tier: evicted continuations write their KV\n"
@@ -566,6 +569,9 @@ ServeOptions parse_serve_options(int argc, char** argv) {
         } else if (arg == "--recency-eviction") {
             options.context_cache.recency_eviction = true;
             context_capacity_explicit              = true;
+        } else if (arg == "--kv-lease-growth") {
+            options.context_cache.kv_lease_growth = true;
+            context_capacity_explicit             = true;
         } else if (arg == "--max-private-continuations") {
             options.context_cache.max_private_continuations =
                 static_cast<std::uint32_t>(parse_nonnegative_int(

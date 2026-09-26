@@ -255,6 +255,12 @@ struct ContextCacheOptions {
     // room, and incremental search may fully evict only inside that sacrificed tail and only an
     // owner Host cannot take. Off by default: the economic search alone chooses what goes.
     bool recency_eviction = false;
+    // An active request's Device KV entitlement is its prompt plus a bounded window of its output
+    // (4096 tokens, or the prefill chunk when larger), extended at decode-round boundaries, rather
+    // than prompt plus the whole max_tokens budget. When the pool cannot extend it, idle retained
+    // owners are released least recently used first; if the smallest step still does not fit, the
+    // answer ends with finish_reason length before max_tokens. Off by default for that reason.
+    bool kv_lease_growth = false;
     // The engine anchors message boundaries itself: every request offers private long anchors at
     // up to L message boundaries, on the grid long_anchor_min_spacing_tokens sets, so a later
     // request that rewrites history there resumes from the anchor instead of root. L then defaults
@@ -1249,6 +1255,9 @@ struct RuntimeStats {
     std::uint64_t active_captures_aborted   = 0;
     // Materializations aborted because a context-cache store rejected the placement.
     std::uint64_t context_cache_exhausted_requests = 0;
+    // A capture the Program declined because the offer was not physically feasible. Unlike an
+    // abort this is a silent retention loss, so it needs its own counter to be observable.
+    std::uint64_t active_captures_skipped = 0;
 
     std::uint64_t root_selections                    = 0;
     std::uint64_t private_endpoint_selections        = 0;
@@ -1299,6 +1308,11 @@ struct RuntimeStats {
     std::uint32_t host_state_occupied_slots            = 0;
     std::uint32_t device_main_kv_occupied_pages        = 0;
     std::uint32_t device_backend_kv_occupied_pages     = 0;
+    // Un-written growth reservation held by active requests, split out of the occupied totals
+    // above. Occupancy alone cannot distinguish KV that exists from KV a request is merely still
+    // entitled to, which is what made context-cache starvation invisible in the request log.
+    std::uint32_t device_main_kv_lease_pages           = 0;
+    std::uint32_t device_backend_kv_lease_pages        = 0;
     std::size_t host_kv_occupied_bytes                 = 0;
     std::uint64_t pressure_private_owners_degraded     = 0;
     std::uint64_t pressure_private_owners_evicted      = 0;

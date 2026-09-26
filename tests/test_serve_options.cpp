@@ -748,6 +748,7 @@ int main() {
                                         "--kv-capacity",
                                         "--kv-dtype",
                                         "--kv-headroom-mib",
+                                        "--kv-lease-growth",
                                         "--lm-head-draft",
                                         "--lm-head-q4",
                                         "--lm-head-q6",
@@ -1005,6 +1006,11 @@ int main() {
                           .context_cache.recency_eviction &&
                       !parse({"ninfer-serve", "model.ninfer"}).context_cache.recency_eviction,
                   "--recency-eviction was not an off-by-default switch");
+        failures +=
+            check(parse({"ninfer-serve", "model.ninfer", "--kv-lease-growth"})
+                          .context_cache.kv_lease_growth &&
+                      !parse({"ninfer-serve", "model.ninfer"}).context_cache.kv_lease_growth,
+                  "--kv-lease-growth was not an off-by-default switch");
         failures += check(!parse({"ninfer-serve", "model.ninfer"}).log_colours &&
                               parse({"ninfer-serve", "model.ninfer", "--log-colours", "on"})
                                       .log_colours == true &&

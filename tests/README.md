@@ -156,7 +156,8 @@ Add `--host-only` to check semantic binding without uploading weights. This does
 Program or establish native Op support.
 
 The C++ prefix/MTP integration test is separately opt-in because it loads the full artifact and
-runs the real engine:
+runs the real engine. It accepts Qwen3.6 and Qwen3.8 artifacts; its prompt-token goldens are kept
+per model generation because each registers its own chat template:
 
 ```bash
 NINFER_TEST_ARTIFACT=$PWD/out/qwen3_6_27b.ninfer \

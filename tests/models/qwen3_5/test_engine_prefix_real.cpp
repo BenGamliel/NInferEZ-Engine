@@ -785,10 +785,13 @@ int exercise_shared_replacement_and_full_capacity_reuse(const char* artifact) {
 
 int exercise_anthropic_prefix_regression(const char* artifact) {
     ninfer::Engine engine(anthropic_prefix_regression_engine_options(artifact));
+    // The default catalog holds every shared candidate one request can prepare: the explicit
+    // markers plus the Engine-automatic tool, instruction and full-prompt candidates.
     if (!engine.options().context_cache.max_shared_prefixes ||
         *engine.options().context_cache.max_shared_prefixes !=
-            ninfer::kMaximumExplicitPromptCacheMarkers) {
-        std::cerr << "single-concurrency Engine did not expose four default shared prefixes\n";
+            ninfer::kMaximumPreparedPromptCacheCandidatesPerRequest) {
+        std::cerr << "single-concurrency Engine did not size its default shared catalog for one "
+                     "request's full candidate set\n";
         return 1;
     }
 

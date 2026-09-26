@@ -31,16 +31,35 @@ struct CaptureAssessmentImpl;
 } // namespace detail
 
 // Read-only diagnostics sampled from the real Program stores.  This is not an accounting input.
+// The `_lease_pages` fields split the un-written growth reservation out of the corresponding
+// `device_*_kv_pages` total, so a reader can tell KV that actually exists from KV an active
+// request is merely still entitled to.  Only reporting the total hides how much Device KV a
+// running request reserves against the context cache.
 struct PhysicalUsageSnapshot {
     runtime::ProgramResourceRevision resource_revision;
-    std::uint32_t device_state_slots      = 0;
-    std::uint32_t host_state_slots        = 0;
-    std::uint32_t device_main_kv_pages    = 0;
-    std::uint32_t device_backend_kv_pages = 0;
-    std::size_t host_kv_bytes             = 0;
+    std::uint32_t device_state_slots            = 0;
+    std::uint32_t host_state_slots              = 0;
+    std::uint32_t device_main_kv_pages          = 0;
+    std::uint32_t device_backend_kv_pages       = 0;
+    std::uint32_t device_main_kv_lease_pages    = 0;
+    std::uint32_t device_backend_kv_lease_pages = 0;
+    std::size_t host_kv_bytes                   = 0;
 
     [[nodiscard]] friend constexpr bool operator==(const PhysicalUsageSnapshot&,
                                                    const PhysicalUsageSnapshot&) noexcept = default;
+};
+
+// Device KV pages a settled lease still needs beyond what its pools can currently reserve.
+struct DeviceKVLeaseShortfall {
+    std::uint32_t main_pages            = 0; // the full growth step
+    std::uint32_t backend_pages         = 0;
+    std::uint32_t minimum_main_pages    = 0; // the smallest growth step
+    std::uint32_t minimum_backend_pages = 0;
+};
+
+struct DeviceKVPages {
+    std::uint32_t main    = 0;
+    std::uint32_t backend = 0;
 };
 
 enum class TextPhase {
@@ -984,6 +1003,28 @@ public:
     [[nodiscard]] DiscardResult abort_pending(PendingBatch&& pending) noexcept;
     [[nodiscard]] FinishResult finish(SequenceHandle sequence) noexcept;
     [[nodiscard]] AbortResult abort(SequenceHandle sequence) noexcept;
+    // The Device KV lease of an active sequence is extended on demand at a decode-round boundary.
+    // When the pool can no longer extend it, the sequence finishes at the frontier its lease
+    // covers with its generation limit reason instead of failing a launch on coverage: this
+    // reports how many further model tokens that finish licenses, so the caller can bound the
+    // sequence's remaining generation budget. `forced_span_tokens` is the largest forced control
+    // span the caller may still apply through the same budget. Absent while the lease can grow.
+    [[nodiscard]] std::optional<std::uint32_t>
+    device_kv_lease_settlement_tokens(SequenceHandle sequence,
+                                      std::uint32_t forced_span_tokens) const noexcept;
+    // When an active sequence's lease settled because its pools had no space (not because it
+    // reached its output ceiling): the pages still missing for its next growth step. The caller
+    // may free retained cache and resume the lease before it bounds the sequence's budget.
+    [[nodiscard]] std::optional<DeviceKVLeaseShortfall>
+    device_kv_lease_shortfall(SequenceHandle sequence) const noexcept;
+    // Re-opens growth of a space-settled lease once its smallest step fits; the next decode
+    // round extends it. False while the step still does not fit.
+    [[nodiscard]] bool resume_device_kv_lease(SequenceHandle sequence) noexcept;
+    // Device KV pages that releasing this retained owner would return to the pools.
+    [[nodiscard]] DeviceKVPages
+    retained_device_kv_pages(const ContinuationHandle& continuation) const noexcept;
+    [[nodiscard]] DeviceKVPages
+    retained_device_kv_pages(const SharedPrefixHandle& shared) const noexcept;
     [[nodiscard]] ReleaseResult release_continuation(ContinuationHandle&& continuation) noexcept;
     [[nodiscard]] ReleaseResult release_shared_prefix(SharedPrefixHandle&& shared) noexcept;
     // Discards every active and retained owner. When a release fails on state left inconsistent

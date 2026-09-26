@@ -69,10 +69,10 @@ public:
     EngineCore(Instance& instance, DeviceContext& device, const EngineOptions& options,
                ContextMachineCostModel context_cost)
         : instance_(instance), device_(device), max_context_(options.max_context),
-          structured_output_(options.structured_output),
-          max_concurrency_(options.max_concurrency),
+          structured_output_(options.structured_output), max_concurrency_(options.max_concurrency),
           thorough_admission_search_(options.context_cache.thorough_admission_search),
           recover_invariant_failures_(options.recover_invariant_failures),
+          kv_lease_growth_(options.context_cache.kv_lease_growth),
           max_outstanding_(static_cast<std::size_t>(options.max_concurrency) +
                            options.max_pending_requests),
           pending_timeout_(std::chrono::milliseconds(options.pending_timeout_ms)),
@@ -1417,7 +1417,10 @@ private:
         const auto reserved = resources_.reserve_active_capture(
             *instance_.program, *request->lane, std::move(offer), blocked_runnable_requests,
             CancellationFlagView{&request->cancelled});
-        if (reserved == ResourceManagement::ActiveCaptureReserveResult::Skipped) { return; }
+        if (reserved == ResourceManagement::ActiveCaptureReserveResult::Skipped) {
+            ++cumulative_stats_.active_captures_skipped;
+            return;
+        }
         request->capture_pending    = true;
         request->post_capture_state = post_capture_state;
         (void)progress_context_transaction(false);
@@ -1997,6 +2000,50 @@ private:
         publish_runtime_stats();
     }
 
+    // A sequence whose Device KV lease can no longer grow finishes at the frontier its lease
+    // covers. When the pool ran out of space, retained cache is released first so the answer can
+    // continue; only a lease that still cannot take its smallest step has its remaining budget
+    // bounded, so that finish carries the request's generation limit reason instead of the
+    // sequence running past its lease and failing a launch.
+    void apply_device_kv_lease_settlements() {
+        if (!kv_lease_growth_) { return; }
+        for (std::uint32_t lane = 0; lane < max_concurrency_; ++lane) {
+            const auto& request = slots_[lane];
+            if (request == nullptr || !request->is_decode_ready() || !request->sequence ||
+                !request->budget) {
+                continue;
+            }
+            if (const auto shortfall =
+                    instance_.program->device_kv_lease_shortfall(*request->sequence)) {
+                const std::uint32_t released = resources_.reclaim_device_kv_for_lease(
+                    *instance_.program, shortfall->main_pages, shortfall->backend_pages);
+                if (instance_.program->resume_device_kv_lease(*request->sequence)) {
+                    if (released != 0) {
+                        publish_diagnostic(diagnostics_, DiagnosticLevel::Info,
+                                           "Device KV lease of lane %u extended: released %u "
+                                           "retained cache owner(s)",
+                                           lane, released);
+                    }
+                    continue;
+                }
+                if (!request->lease_shortfall_reported) {
+                    request->lease_shortfall_reported = true;
+                    publish_diagnostic(diagnostics_, DiagnosticLevel::Warning,
+                                       "Device KV lease of lane %u cannot grow after releasing %u "
+                                       "retained cache owner(s); still short %u main / %u backend "
+                                       "pages for its smallest step, so the answer ends early "
+                                       "with finish_reason length",
+                                       lane, released, shortfall->minimum_main_pages,
+                                       shortfall->minimum_backend_pages);
+                }
+            }
+            const std::uint32_t control = request->output.control_suffix_tokens();
+            const std::optional<std::uint32_t> limit =
+                instance_.program->device_kv_lease_settlement_tokens(*request->sequence, control);
+            if (limit) { request->budget->cap_remaining(*limit); }
+        }
+    }
+
     void run_control_batch(const ControlMembership& membership) {
         nvtx::ScopedRange control_range(nvtx::Name::ControlBatch, nvtx::Category::Control,
                                         static_cast<std::uint64_t>(membership.size));
@@ -2215,6 +2262,7 @@ private:
                 (void)settle_terminal_requests(boundary);
                 const auto cancelled_at_boundary = snapshot_cancellations();
                 cancel_active_requests(cancelled_at_boundary, boundary);
+                apply_device_kv_lease_settlements();
                 RoundMembership membership =
                     scheduler_.build_round_membership(slots_, max_concurrency_);
                 const bool admission_check_pending =
@@ -2357,6 +2405,7 @@ private:
     const std::uint32_t max_concurrency_;
     const bool thorough_admission_search_;
     const bool recover_invariant_failures_;
+    const bool kv_lease_growth_;
     const std::size_t max_outstanding_;
     const std::chrono::milliseconds pending_timeout_;
     ResourceManagement resources_;

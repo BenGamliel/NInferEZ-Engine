@@ -43,6 +43,20 @@ using PreparedPromptData    = qwen3_5::PreparedPromptData;
 using RewriteCheckpointKind = qwen3_5::RewriteCheckpointKind;
 using RewriteCheckpointSpec = qwen3_5::RewriteCheckpointSpec;
 
+// Device KV is leased on demand. An active request holds a bounded window of its remaining
+// output rather than the whole client budget, and extends that window at a decode-round
+// boundary; a full window is requested first and a step-sized extension is enough when the pool
+// cannot spare one.
+inline constexpr std::uint32_t kKVLeaseGrowthMarginTokens = 4096;
+
+[[nodiscard]] constexpr std::uint32_t kv_pages_for_tokens(std::uint32_t tokens) noexcept {
+    return tokens == 0 ? 0U : 1U + (tokens - 1U) / static_cast<std::uint32_t>(kPagedKVPageSize);
+}
+
+[[nodiscard]] constexpr std::uint32_t kv_tokens_for_pages(std::uint32_t pages) noexcept {
+    return pages == 0 ? 0U : (pages - 1U) * static_cast<std::uint32_t>(kPagedKVPageSize) + 1U;
+}
+
 using ReusePath = ninfer::PrefixReusePath;
 
 [[nodiscard]] constexpr bool is_rewrite_checkpoint_restore(ReusePath path) noexcept {
@@ -431,6 +445,18 @@ struct RequestControl {
     detail::PhysicalResources active_resources;
     detail::PhysicalResources optional_resources;
     bool publish_continuation = true;
+    // The sequence's own output ceiling: the largest frontier its lease may ever cover, so
+    // on-demand growth never leases pages the request cannot reach.
+    std::uint32_t lease_ceiling = 0;
+    // Set when the Device KV lease cannot be extended any further: the request finishes at the
+    // frontier its lease covers with its generation limit reason instead of failing a launch on
+    // coverage.
+    bool lease_settled = false;
+    // A settlement caused by pool space rather than the output ceiling, and the entitlements its
+    // full and smallest growth steps asked for: retained cache may give those pages back.
+    bool lease_space_limited = false;
+    DeviceKVPages lease_full_target;
+    DeviceKVPages lease_minimum_target;
 
     struct Prefill {
         PreparedPromptData prompt;
@@ -588,6 +614,17 @@ public:
     }
 
     [[nodiscard]] qwen3_5::PhysicalUsageSnapshot physical_usage() const noexcept;
+
+    [[nodiscard]] std::optional<std::uint32_t>
+    device_kv_lease_settlement_tokens(SequenceHandle sequence,
+                                      std::uint32_t forced_span_tokens) const noexcept;
+    [[nodiscard]] std::optional<DeviceKVLeaseShortfall>
+    device_kv_lease_shortfall(SequenceHandle sequence) const noexcept;
+    [[nodiscard]] bool resume_device_kv_lease(SequenceHandle sequence) noexcept;
+    [[nodiscard]] DeviceKVPages
+    retained_device_kv_pages(const ContinuationHandle& continuation) const noexcept;
+    [[nodiscard]] DeviceKVPages
+    retained_device_kv_pages(const SharedPrefixHandle& shared) const noexcept;
 
     [[nodiscard]] MemorySummary memory_summary() const noexcept;
 
@@ -1366,6 +1403,34 @@ private:
     void unbind_sequence_kv(SequenceState& sequence) noexcept;
     void ensure_sequence_kv_mapped(SequenceState& sequence, std::uint32_t main_tokens,
                                    std::uint32_t backend_tokens = 0);
+
+    [[nodiscard]] std::uint32_t kv_lease_growth_margin_tokens() const noexcept {
+        return std::max(prefill_chunk, kKVLeaseGrowthMarginTokens);
+    }
+
+    [[nodiscard]] std::uint32_t kv_lease_cushion_pages() const noexcept {
+        // One round's Backend requirement can sit a verified extent plus a draft window above the
+        // frontier the previous round checked, so the cushion has to absorb that jump before the
+        // lease is extended again. A copy round can verify wider than the neural draft window.
+        const auto page  = static_cast<std::uint32_t>(kPagedKVPageSize);
+        const auto slack = widest_verify_window() + draft_window + 2U;
+        return (slack + page - 1U) / page + 1U;
+    }
+
+    // The Backend lease also covers the drafts a round may still verify past the sequence's
+    // output ceiling, and one forced control span.
+    [[nodiscard]] std::uint32_t kv_lease_backend_allowance_tokens() const noexcept {
+        return widest_verify_window() + std::min(draft_window, qwen3_5::kMtpDecodeMaximumDrafts) +
+               1U;
+    }
+
+    // Page groups an entitlement needs to cover `tokens` and still hold a full cushion.
+    [[nodiscard]] std::uint32_t kv_lease_pages_for_tokens(std::uint32_t tokens) const noexcept {
+        return kv_pages_for_tokens(tokens) + kv_lease_cushion_pages();
+    }
+
+    void ensure_sequence_kv_lease(SequenceState& sequence, std::uint32_t main_tokens,
+                                  std::uint32_t backend_tokens);
     void trim_sequence_kv(SequenceState& sequence, std::uint32_t main_tokens,
                           std::uint32_t backend_tokens = 0);
     void release_sequence_growth_entitlement(SequenceState& sequence) noexcept;

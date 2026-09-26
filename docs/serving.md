@@ -1190,6 +1190,7 @@ The table lists executable defaults. The startup example selects a long-context 
 | `--first-token-logprobs` | accept Chat Completions `top_logprobs` (`1..20`, non-streaming) and report the first generated token's log probability with that many alternatives under the raw next-token distribution; `logprobs: true` stays unsupported | off |
 | `--context-cache-policy default\|rolling` | `rolling`: within one cache session (a Responses `prompt_cache_key`), a capture that extends a resident checkpoint the request matched exactly inherits that resident's demand, so a conversation whose prompt only grows keeps rolling its frontier forward; with conversations sharing a prefix, one conversation's extension can evict the prefix the others use | `default` |
 | `--concurrent-prefill` | admit waiting requests to free lanes while other requests prefill, instead of holding admission until the staged prefill finishes | off |
+| `--kv-lease-growth` | admission reserves the prompt plus a 4096-token output window (or `--prefill-chunk` when larger) instead of the whole `max_tokens` budget and extends it at decode-round boundaries, releasing idle retained cache owners least recently used first when the pool is short; an answer whose smallest step still does not fit ends with `finish_reason=length` before `max_tokens` | off |
 | `--recency-eviction` | pressure ranks private conversations and shared prefixes in one least-recently-used order (latest hit or publication): a request that does not fit gives up the fewest oldest owners that make it fit and spares those it does not need, instead of clearing every owner it cannot reuse; kept owners, shared prefixes included, are demoted to Host where it has room, and the search may fully evict only inside that tail and only an owner Host cannot take | off |
 | `--thorough-admission-search` | a new request's admission searches up to 250 ms for its reuse plan at every boundary, even while other requests decode (otherwise 50 ms idle, 10 ms busy), and a request whose plan saves more earns a longer base grant; a running decode can then pause up to that long when a request arrives | off |
 | `--release-diverged-checkpoints` | a private checkpoint of one cache session whose next request diverges from it at the checkpoint's frontier keeps no retention value, so it is the first to go when the cache needs room; a checkpoint that merely cannot serve the request, another session's or a shared prefix, keeps its value. A client that switches back to an earlier branch of the conversation loses that branch's cache | off |
@@ -1350,7 +1351,7 @@ without CUDA Graphs); the startup log warns when the second exceeds the first.
 `ngram_archive_bytes` and `ngram_session_bytes` (`--ngram-archive-mib`, `0` keeps drafting
 request-local, and `--ngram-session-mib`), and `ngram_native_sessions`. Its `context_cache` object
 records the resolved capacities and the `rolling_retention`, `release_diverged_checkpoints`,
-`thorough_admission_search`, `recency_eviction`, `automatic_long_anchors` and
+`thorough_admission_search`, `recency_eviction`, `kv_lease_growth`, `automatic_long_anchors` and
 `long_anchor_min_spacing_tokens` settings.
 
 `request_done.engine_timing` separates FIFO `queue_wait_seconds`, blocking
@@ -1486,6 +1487,13 @@ Capacity resolves once at startup.
 
 Admission reserves the full prompt-plus-effective-output page entitlement through request
 completion. A request remains queued until a legal resource plan can satisfy that entitlement.
+With `--kv-lease-growth` admission instead reserves the prompt plus a bounded Device KV window over
+the remaining output (4096 tokens, or `--prefill-chunk` when larger) and extends it at each
+decode-round boundary, so a client that asks for far more output than it generates does not hold
+the prefix cache out of the pool. When the pool cannot extend the window, idle retained cache
+owners are released least recently used first; if the smallest step still does not fit, the
+request completes at the frontier its window covers and reports `finish_reason=length` before
+reaching `max_tokens`.
 
 Each reusable checkpoint contains KV and complete continuation state. At admission, capture, and
 finish boundaries, resource pressure may keep it on Device, move its StateImage and/or KV replicas
