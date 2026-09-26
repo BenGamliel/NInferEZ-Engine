@@ -1300,6 +1300,9 @@ private:
     [[nodiscard]] runtime::PrefillStepResult
     advance_prefill(SequenceState& sequence, RequestControl& request,
                     runtime::ExecutionTiming* failed_timing);
+    // Row-0 DFlash frame controls (lane, state slots, backend KV row) read by a prefill's
+    // feature sink. The frame is shared with decode rounds, so every prefill step re-uploads them.
+    void upload_dflash_prefill_controls(const SequenceState& sequence);
     void enqueue_dflash_context_append(std::span<const std::uint32_t> lanes,
                                        std::span<const std::uint32_t> starts,
                                        std::span<const std::uint32_t> counts);
