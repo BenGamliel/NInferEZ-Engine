@@ -1,6 +1,7 @@
 #include "ops/softmax_attention/sliding_window/launch.h"
 
 #include "core/device.h"
+#include "core/pdl.cuh"
 #include "ops/softmax_attention/sliding_window/kernel.cuh"
 
 #include <algorithm>
@@ -129,30 +130,9 @@ void sliding_window_attention_launch(const Tensor& q, const Tensor& query_k, con
         // Window determines visibility and ring addressing, not the MMA storage layout.
         const auto partial = [&]<bool Direct>() {
             const dim3 grid(kContextQueryKVHeads, Direct ? 1 : plan.split_capacity, q.ne[3]);
-            sliding_window_attention_split_partial_kernel<Tokens, Warps, KeyBlock, Direct>
-                <<<grid, Warps * 32, SmemBytes, stream>>>(
-                    static_cast<const __nv_bfloat16*>(q.data),
-                    static_cast<const __nv_bfloat16*>(query_k.data),
-                    static_cast<const __nv_bfloat16*>(query_v.data),
-                    static_cast<const std::int32_t*>(positions.data),
-                    static_cast<const std::int32_t*>(valid_columns.data),
-                    static_cast<const std::int32_t*>(lanes.data),
-                    static_cast<const __nv_bfloat16*>(context.k.data),
-                    static_cast<const __nv_bfloat16*>(context.v.data),
-                    static_cast<int>(context.padded_capacity), plan.window - 1, plan.max_context,
-                    1, scale, static_cast<float*>(partial_acc.data),
-                    static_cast<float*>(partial_m.data), static_cast<float*>(partial_l.data),
-                    static_cast<__nv_bfloat16*>(out.data));
-            CUDA_CHECK(cudaGetLastError());
-        };
-        if (direct) {
-            partial.template operator()<true>();
-            return;
-        }
-
-        const dim3 partial_grid(kContextQueryKVHeads, plan.split_capacity, q.ne[3]);
-        sliding_window_attention_split_partial_kernel<Tokens, Warps, KeyBlock, false>
-            <<<partial_grid, Warps * 32, SmemBytes, stream>>>(
+            CUDA_CHECK(pdl::launch_consumer(
+                {dim3(grid), dim3(Warps * 32), SmemBytes, stream},
+                sliding_window_attention_split_partial_kernel<Tokens, Warps, KeyBlock, Direct>,
                 static_cast<const __nv_bfloat16*>(q.data),
                 static_cast<const __nv_bfloat16*>(query_k.data),
                 static_cast<const __nv_bfloat16*>(query_v.data),
@@ -161,10 +141,32 @@ void sliding_window_attention_launch(const Tensor& q, const Tensor& query_k, con
                 static_cast<const std::int32_t*>(lanes.data),
                 static_cast<const __nv_bfloat16*>(context.k.data),
                 static_cast<const __nv_bfloat16*>(context.v.data),
-                static_cast<int>(context.padded_capacity), plan.window - 1, plan.max_context,
-                plan.split_capacity, scale, static_cast<float*>(partial_acc.data),
-                static_cast<float*>(partial_m.data), static_cast<float*>(partial_l.data),
-                static_cast<__nv_bfloat16*>(out.data));
+                static_cast<int>(context.padded_capacity), plan.window - 1, plan.max_context, 1,
+                scale, static_cast<float*>(partial_acc.data), static_cast<float*>(partial_m.data),
+                static_cast<float*>(partial_l.data), static_cast<__nv_bfloat16*>(out.data)));
+            CUDA_CHECK(cudaGetLastError());
+        };
+        if (direct) {
+            partial.template operator()<true>();
+            return;
+        }
+
+        const dim3 partial_grid(kContextQueryKVHeads, plan.split_capacity, q.ne[3]);
+        CUDA_CHECK(pdl::launch_consumer(
+            {dim3(partial_grid), dim3(Warps * 32), SmemBytes, stream},
+            sliding_window_attention_split_partial_kernel<Tokens, Warps, KeyBlock, false>,
+            static_cast<const __nv_bfloat16*>(q.data),
+            static_cast<const __nv_bfloat16*>(query_k.data),
+            static_cast<const __nv_bfloat16*>(query_v.data),
+            static_cast<const std::int32_t*>(positions.data),
+            static_cast<const std::int32_t*>(valid_columns.data),
+            static_cast<const std::int32_t*>(lanes.data),
+            static_cast<const __nv_bfloat16*>(context.k.data),
+            static_cast<const __nv_bfloat16*>(context.v.data),
+            static_cast<int>(context.padded_capacity), plan.window - 1, plan.max_context,
+            plan.split_capacity, scale, static_cast<float*>(partial_acc.data),
+            static_cast<float*>(partial_m.data), static_cast<float*>(partial_l.data),
+            static_cast<__nv_bfloat16*>(out.data)));
         CUDA_CHECK(cudaGetLastError());
 
         // Honour plan.reduce_warps rather than hardcoding one warp. The planner sets four for
@@ -174,14 +176,15 @@ void sliding_window_attention_launch(const Tensor& q, const Tensor& query_k, con
         const auto launch_reduce = [&]<int ReduceWarps>() {
             constexpr int ReduceRows = kContextQueryQHeads * Tokens;
             const dim3 reduce_grid((ReduceRows + ReduceWarps - 1) / ReduceWarps, 1, q.ne[3]);
-            sliding_window_attention_reduce_kernel<Tokens, KeyBlock, ReduceWarps>
-                <<<reduce_grid, ReduceWarps * 32, 0, stream>>>(
-                    static_cast<const float*>(partial_acc.data),
-                    static_cast<const float*>(partial_m.data),
-                    static_cast<const float*>(partial_l.data),
-                    static_cast<const std::int32_t*>(positions.data),
-                    static_cast<const std::int32_t*>(valid_columns.data), plan.window - 1,
-                    plan.max_context, plan.split_capacity, static_cast<__nv_bfloat16*>(out.data));
+            CUDA_CHECK(pdl::launch_consumer(
+                {dim3(reduce_grid), dim3(ReduceWarps * 32), 0, stream},
+                sliding_window_attention_reduce_kernel<Tokens, KeyBlock, ReduceWarps>,
+                static_cast<const float*>(partial_acc.data),
+                static_cast<const float*>(partial_m.data),
+                static_cast<const float*>(partial_l.data),
+                static_cast<const std::int32_t*>(positions.data),
+                static_cast<const std::int32_t*>(valid_columns.data), plan.window - 1,
+                plan.max_context, plan.split_capacity, static_cast<__nv_bfloat16*>(out.data)));
         };
         if (plan.reduce_warps == 4) {
             launch_reduce.template operator()<4>();

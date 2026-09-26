@@ -1,6 +1,7 @@
 #include "core/weight.h"
 #include "ops/gdn_gating_proj/bf16/bf16_gdn_gating_proj_kernels.h"
 #include "core/device.h"
+#include "core/pdl.cuh"
 #include "ops/common/math.cuh"
 #include "ops/common/memory.cuh"
 #include "ops/common/warp.cuh"
@@ -20,6 +21,7 @@ __global__ __launch_bounds__(Threads) void gdn_norm_gating_27_simt(
     const __nv_bfloat16* x, const __nv_bfloat16* nw, const __nv_bfloat16* aw,
     const __nv_bfloat16* bw, const float* alog, const float* bias, const __nv_bfloat16* signs,
     __nv_bfloat16* h, float* g, float* beta, int tokens, float eps) {
+    pdl::enter();
     constexpr int D = 5120, H = 48, Warps = Threads / 32;
     const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5, head = blockIdx.x,
               first = blockIdx.y * Tile;
@@ -136,16 +138,17 @@ void bf16_gdn_norm_gating_proj_27_launch(const Tensor& x, const Tensor& norm_wei
                                          Tensor& beta, const Tensor* signs, cudaStream_t stream) {
     const auto launch = [&]<int T, int Threads>() {
         const auto run = [&]<bool Rotate>() {
-            gdn_norm_gating_27_simt<T, Threads, Rotate>
-                <<<dim3(48, (x.ne[1] + T - 1) / T), Threads, 0, stream>>>(
-                    static_cast<const __nv_bfloat16*>(x.data),
-                    static_cast<const __nv_bfloat16*>(norm_weight.data),
-                    static_cast<const __nv_bfloat16*>(a_weight.qdata),
-                    static_cast<const __nv_bfloat16*>(b_weight.qdata),
-                    static_cast<const float*>(alog.data), static_cast<const float*>(bias.data),
-                    Rotate ? static_cast<const __nv_bfloat16*>(signs->data) : nullptr,
-                    static_cast<__nv_bfloat16*>(h.data), static_cast<float*>(g.data),
-                    static_cast<float*>(beta.data), x.ne[1], eps);
+            CUDA_CHECK(pdl::launch_consumer(
+                {dim3(48, (x.ne[1] + T - 1) / T), dim3(Threads), 0, stream},
+                gdn_norm_gating_27_simt<T, Threads, Rotate>,
+                static_cast<const __nv_bfloat16*>(x.data),
+                static_cast<const __nv_bfloat16*>(norm_weight.data),
+                static_cast<const __nv_bfloat16*>(a_weight.qdata),
+                static_cast<const __nv_bfloat16*>(b_weight.qdata),
+                static_cast<const float*>(alog.data), static_cast<const float*>(bias.data),
+                Rotate ? static_cast<const __nv_bfloat16*>(signs->data) : nullptr,
+                static_cast<__nv_bfloat16*>(h.data), static_cast<float*>(g.data),
+                static_cast<float*>(beta.data), x.ne[1], eps));
         };
         if (signs != nullptr) {
             run.template operator()<true>();

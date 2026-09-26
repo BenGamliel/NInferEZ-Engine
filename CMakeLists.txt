@@ -36,6 +36,17 @@ if(CMAKE_CUDA_ARCHITECTURES MATCHES "^(80|86|89)$" OR NOT NINFER_SM120_NATIVE)
 else()
   set(NINFER_COMPAT_PATH OFF)
 endif()
+# Programmatic dependent launch lets a captured decode-graph kernel stage its weights while the
+# kernel before it finishes (src/core/pdl.cuh). It needs sm_90 or newer, so the compatibility path
+# launches in stream order; NINFER_PDL=ON turns it on for a 120a build of that path. The native
+# routes always use it.
+option(NINFER_PDL "On a 120a build, launch decode-graph kernels as programmatic dependents" OFF)
+if(NINFER_PDL)
+  if(NOT CMAKE_CUDA_ARCHITECTURES STREQUAL "120a")
+    message(FATAL_ERROR "NINFER_PDL requires CMAKE_CUDA_ARCHITECTURES=120a")
+  endif()
+  add_compile_definitions(NINFER_PDL=1)
+endif()
 # Every 120a build keeps the FP8 A8 and NVFP4 W4A4 units, the compatibility path included: without
 # them an NVFP4 weight has no route wider than 16 columns, so an NVFP4 artifact could not start, and
 # FP8 weights prefill through their dequantizing A16 route. They are selected only by FP8 and NVFP4

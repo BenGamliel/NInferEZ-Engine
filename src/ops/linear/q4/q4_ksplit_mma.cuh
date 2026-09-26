@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/device.h"
+#include "core/pdl.cuh"
 #include "ops/common/mma.cuh"
 #include "ops/common/memory.cuh"
 #include "ops/common/small_t_layout.cuh"
@@ -163,10 +165,15 @@ __launch_bounds__(256, MinBlocks) __global__
         }
     };
 
-    const auto issue_group = [&](int group_index) {
+    // The weights are immutable: with a row map that reads no memory, group 0's stream before the
+    // dependency wait, and its activations and every later group follow it.
+    constexpr bool kPrefetchWeights = std::is_empty_v<RowPolicy>;
+    const auto issue_group          = [&](int group_index) {
         if (group_index < kGroups) {
             Stage& stage = shared.stages[group_index % Stages];
-            stage_weight(group_index * kGroupK, stage);
+            if (!kPrefetchWeights || group_index != 0) {
+                stage_weight(group_index * kGroupK, stage);
+            }
             stage_x(group_index * kGroupK, stage);
         }
         cp_commit(); // empty commits keep cp_wait<Stages - 1> exact through the tail
@@ -175,6 +182,8 @@ __launch_bounds__(256, MinBlocks) __global__
     const int code_byte     = k_split * (kTileK / 2) + 8 * lid;
     float acc[kTpw][kNt][4] = {};
 
+    if constexpr (kPrefetchWeights) { stage_weight(0, shared.stages[0]); }
+    pdl::enter_streaming();
 #pragma unroll
     for (int prefetch = 0; prefetch < Stages - 1; ++prefetch) { issue_group(prefetch); }
 
@@ -238,6 +247,7 @@ __launch_bounds__(256, MinBlocks) __global__
         // The next iteration's issue_group writes the stage this one just read.
         __syncthreads();
     }
+    pdl::trigger_dependents();
     cp_wait<0>();
 
     // Reduce each tile's K partials: odd K warps publish, even ones fold their neighbour, then K
@@ -328,8 +338,9 @@ void q4_ksplit_mma_launch(int blocks, cudaStream_t stream, const __nv_bfloat16* 
                                                   RowPolicy, MaskedColumns, KWarps, Stages,
                                                   TilesPerWarp, MinBlocks>;
     static_assert(kBytes <= 48 * 1024, "small-T MMA stages must fit static shared memory");
-    kernel<<<blocks, SmallTLayout<KWarps>::kThreads, 0, stream>>>(x, codes, scales, out, epilogue,
-                                                                   row_policy, columns);
+    CUDA_CHECK(pdl::launch_consumer(
+        {dim3(static_cast<unsigned>(blocks)), dim3(SmallTLayout<KWarps>::kThreads), 0, stream},
+        kernel, x, codes, scales, out, epilogue, row_policy, columns));
 }
 
 } // namespace ninfer::ops::detail
