@@ -48,6 +48,8 @@ __launch_bounds__(BlockSize) __global__
 
     float local_max = -CUDART_INF_F;
     float local_sum = 0.0f;
+    // Requires finite logits (see target_logprobs.h): -inf before any finite value in a
+    // thread's subsequence NaN-poisons local_sum through expf(-inf - -inf).
     for (std::int32_t row = static_cast<std::int32_t>(threadIdx.x); row < valid_rows;
          row += BlockSize) {
         const float value   = __bfloat162float(logits[base + row]);
