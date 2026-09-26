@@ -21,6 +21,7 @@
 #include <optional>
 #include <span>
 #include <stdexcept>
+#include <string_view>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -336,27 +337,58 @@ public:
         candidates.push_back(Candidate{.plan = std::move(*root)});
 
         if (cache_enabled_) {
-            {
-                const auto probe1 = base.prefix_shortlist_key(1);
-                std::uint64_t sfp = 0;
-                if (base.context_cache().session_key) {
-                    const auto sv = base.context_cache().session_key->view();
-                    for (const char c : sv) {
-                        sfp = (sfp ^ static_cast<unsigned char>(c)) * 1099511628211ULL;
-                    }
+            const auto session_fingerprint = [](const std::string_view view) noexcept {
+                std::uint64_t hash = 0;
+                for (const char c : view) {
+                    hash = (hash ^ static_cast<unsigned char>(c)) * 1099511628211ULL;
                 }
+                return static_cast<unsigned long long>(hash);
+            };
+            if (cdbg) {
+                const auto probe1 = base.prefix_shortlist_key(1);
                 cdbg_log("[candgen] === episode prefix_index=%zu session=%016llx digests=%d "
-                         "base_tag=%u ===\n",
-                         prefix_index_.size(), static_cast<unsigned long long>(sfp), probe1 ? 1 : 0,
-                         probe1 ? probe1->identity_tag : 0U);
+                         "base_tag=%u sl_size=%zu ===\n",
+                         prefix_index_.size(),
+                         base.context_cache().session_key
+                             ? session_fingerprint(base.context_cache().session_key->view())
+                             : 0ULL,
+                         probe1 ? 1 : 0, probe1 ? probe1->identity_tag : 0U,
+                         base.prefix_shortlist_size());
+                if (!current_session_cell) {
+                    cdbg_log("[candgen] OWN cell=NONE update_index=%d session=%d\n",
+                             base.context_cache().update_session_index ? 1 : 0,
+                             base.context_cache().session_key ? 1 : 0);
+                } else if (const auto& cell = session_index_[*current_session_cell];
+                           cell.slot < catalog_count_) {
+                    const CatalogEntry& own = catalog_[cell.slot];
+                    cdbg_log("[candgen] OWN slot=%u state=%d handle=%d id=%llu rev=%llu\n",
+                             cell.slot, static_cast<int>(own.state), own.handle ? 1 : 0,
+                             static_cast<unsigned long long>(own.id),
+                             static_cast<unsigned long long>(own.revision));
+                } else {
+                    cdbg_log("[candgen] OWN slot=ABSENT\n");
+                }
             }
             for (const PrefixIndexEntry& index : prefix_index_) {
                 if (!valid_prefix_index_entry(index)) { continue; }
                 const std::optional<PrefixShortlistKey> incoming =
                     base.prefix_shortlist_key(index.key.frontier);
                 if (!incoming) {
-                    cdbg_log("[candgen] priv SKIP slot=%u NULLOPT idx_frontier=%u shared=%d\n",
-                             index.slot, index.key.frontier, index.shared ? 1 : 0);
+                    if (index.shared) {
+                        cdbg_log("[candgen] priv SKIP slot=%u NULLOPT idx_frontier=%u shared=1 "
+                                 "sl_size=%zu\n",
+                                 index.slot, index.key.frontier, base.prefix_shortlist_size());
+                    } else {
+                        const CatalogEntry& stored = catalog_[index.slot];
+                        const bool own = stored.session && base.context_cache().session_key &&
+                                         *stored.session == *base.context_cache().session_key;
+                        cdbg_log("[candgen] priv SKIP slot=%u NULLOPT idx_frontier=%u shared=0 "
+                                 "sl_size=%zu sess=%016llx %s\n",
+                                 index.slot, index.key.frontier, base.prefix_shortlist_size(),
+                                 stored.session ? session_fingerprint(stored.session->view())
+                                                : 0ULL,
+                                 own ? "OWN" : "XSESSION");
+                    }
                     continue;
                 }
                 if (incoming->identity_tag != index.key.identity_tag) {

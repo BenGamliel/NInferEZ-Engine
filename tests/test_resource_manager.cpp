@@ -257,6 +257,10 @@ struct FakeRequestBasePlan {
         return FakeShortlistKey{.digest = shortlist_digest, .frontier = frontier};
     }
 
+    [[nodiscard]] std::size_t prefix_shortlist_size() const noexcept {
+        return allow_shortlist ? 1 : 0;
+    }
+
     [[nodiscard]] std::optional<PrefillWork>
     shared_candidate_rebuild_work(std::uint32_t frontier) const noexcept {
         const auto found =

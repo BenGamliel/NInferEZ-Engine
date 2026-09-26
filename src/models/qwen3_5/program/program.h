@@ -277,6 +277,8 @@ public:
     [[nodiscard]] const PreparedContextCache& context_cache() const noexcept;
     [[nodiscard]] std::optional<PrefixShortlistKey>
     prefix_shortlist_key(std::uint32_t frontier) const noexcept;
+    // The frontiers prefix_shortlist_key can key: the prompt's digest count.
+    [[nodiscard]] std::size_t prefix_shortlist_size() const noexcept;
     [[nodiscard]] std::optional<runtime::PrefillWork>
     shared_candidate_rebuild_work(std::uint32_t frontier) const noexcept;
 

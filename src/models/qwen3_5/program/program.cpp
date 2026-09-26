@@ -98,6 +98,10 @@ RequestBasePlan::prefix_shortlist_key(std::uint32_t frontier) const noexcept {
     };
 }
 
+std::size_t RequestBasePlan::prefix_shortlist_size() const noexcept {
+    return impl_ != nullptr ? impl_->prefix_digests.size() : 0;
+}
+
 std::optional<runtime::PrefillWork>
 RequestBasePlan::shared_candidate_rebuild_work(std::uint32_t frontier) const noexcept {
     if (impl_ == nullptr) { return std::nullopt; }
