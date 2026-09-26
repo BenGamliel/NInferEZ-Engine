@@ -136,6 +136,9 @@ struct FakeCacheSessionKey {
 struct FakeShortlistKey {
     std::uint32_t digest   = 0;
     std::uint32_t frontier = 0;
+    // The real PrefixShortlistKey surface the NINFER_MAT_DEBUG trace prints.
+    std::array<std::uint64_t, 2> digests{};
+    std::uint32_t identity_tag = 0;
 
     friend bool operator==(FakeShortlistKey, FakeShortlistKey) = default;
 };
