@@ -4,6 +4,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -150,6 +151,70 @@ int run_tests() {
     failures += check(k8v4.kv_cache == ninfer::KvCacheStorage::Fp8KeyNvfp4Value,
                       "--kv-dtype k8v4 did not select asymmetric K8V4 KV");
     const std::string help = ninfer::cli::usage_text("ninfer-cli");
+    // Every option the parser accepts is described in the grouped help.
+    for (const std::string_view flag : {"--chat-template",
+                                        "--device",
+                                        "--devices",
+                                        "--draft-tokens",
+                                        "--embedding-q4",
+                                        "--embedding-q6",
+                                        "--frequency-penalty",
+                                        "--gdn-state-fp16",
+                                        "--greedy",
+                                        "--json",
+                                        "--json-schema",
+                                        "--kv-capacity",
+                                        "--kv-dtype",
+                                        "--kv-headroom-mib",
+                                        "--lm-head-draft",
+                                        "--lm-head-q4",
+                                        "--lm-head-q6",
+                                        "--log-level",
+                                        "--lookup-ngram",
+                                        "--max-context",
+                                        "--max-new",
+                                        "--messages",
+                                        "--min-p",
+                                        "--mlp-a8-decode",
+                                        "--mtp-experts-q4",
+                                        "--ngram-draft-tokens",
+                                        "--ngram-min-match",
+                                        "--no-cuda-graph",
+                                        "--no-prefill-a8",
+                                        "--no-prefill-cublas-projections",
+                                        "--no-thinking",
+                                        "--prefill-chunk",
+                                        "--prefill-cublas",
+                                        "--presence-penalty",
+                                        "--print-token-ids",
+                                        "--prompt",
+                                        "--raw-output",
+                                        "--reasoning-effort",
+                                        "--reasoning-stop",
+                                        "--rope-yarn",
+                                        "--seed",
+                                        "--spec",
+                                        "--stage-layers",
+                                        "--stop",
+                                        "--stop-token-id",
+                                        "--temperature",
+                                        "--thinking-budget",
+                                        "--top-k",
+                                        "--top-p",
+                                        "--vision",
+                                        "--vision-max-merged",
+                                        "--vision-offload",
+                                        "--vision-residency",
+                                        "--vram-headroom-mib",
+                                        "--wddm-evictable-budget"}) {
+        const std::string message = "CLI help omits " + std::string(flag);
+        failures += check(help.find(flag) != std::string::npos, message.c_str());
+    }
+    for (const char* section :
+         {"INPUT", "CONTEXT", "KV CACHE", "SPECULATIVE DECODING", "PRECISION & KERNELS", "SAMPLING",
+          "THINKING", "OUTPUT", "VISION", "LOGGING"}) {
+        failures += check(help.find(section) != std::string::npos, "CLI help omits a category");
+    }
     failures +=
         check(help.find("nvfp4") != std::string::npos && help.find("k8v4") != std::string::npos,
               "CLI help omits a production KV storage mode");
