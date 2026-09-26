@@ -694,8 +694,6 @@ public:
     std::optional<PinnedHostBuffer> first_token_logits_host;
     // Present under adaptive MTP: picks each round's verification width.
     std::optional<MtpAdaptiveBatchController> mtp_controller;
-    // The width the latest MTP round verified, which lays out its target buffers.
-    std::uint32_t mtp_round_verify_window = 0;
     TokenId* host_tokens = nullptr;
     std::optional<PinnedHostBuffer> ordinary_host;
     qwen3_5::OrdinaryDecodeIngress* ordinary_host_ingress = nullptr;

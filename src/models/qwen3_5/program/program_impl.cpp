@@ -524,7 +524,6 @@ ProgramImpl::ProgramImpl(const execution::Parameters& parameters_in, const Seque
             cudaMemsetAsync(sampling_config.data, 0, sampling_config.bytes(), device.stream));
     }
     device.synchronize();
-    mtp_round_verify_window = draft_window;
     if (speculative_backend == SpeculativeBackend::Mtp && mtp_policy == MtpDraftPolicy::Adaptive) {
         mtp_controller.emplace();
         mtp_controller->reset(draft_window);

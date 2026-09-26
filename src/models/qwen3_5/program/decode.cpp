@@ -619,7 +619,6 @@ ProgramImpl::decode_mtp_batch(std::span<const std::uint32_t> lanes,
             mtp_controller->observe_execution(static_cast<std::uint32_t>(lanes.size()),
                                               verify_window, seconds);
         }
-        mtp_round_verify_window = verify_window;
         return runtime::BatchedGeneratedRound{
             .tokens     = std::span<const TokenId>(mtp_host_egress->licensed_tokens.data(),
                                                    lanes.size() * width),
