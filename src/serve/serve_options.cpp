@@ -166,7 +166,7 @@ std::string serve_usage_text(const char* argv0) {
            "  --max-private-continuations N private continuation catalog (default 2x\n"
            "                                max-concurrency)\n"
            "  --max-shared-prefixes N       shared stable-prefix catalog (default\n"
-           "                                max(max-concurrency,4))\n"
+           "                                max(max-concurrency,7))\n"
            "  --max-long-anchors-per-continuation N\n"
            "                                long anchors kept per continuation (default 2, 4\n"
            "                                with --auto-long-anchors)\n"
@@ -321,7 +321,7 @@ std::string serve_usage_text(const char* argv0) {
            "  Sampler defaults come from the loaded model and the resolved thinking mode;\n"
            "  server flags and request fields override individual values.\n"
            "  context cache defaults: device-state=max-concurrency, private=2x concurrency,\n"
-           "  shared=max(max-concurrency,4), anchors=2 (4 with --auto-long-anchors),\n"
+           "  shared=max(max-concurrency,7), anchors=2 (4 with --auto-long-anchors),\n"
            "  Host state=8 slots, Host KV=8192 MiB.\n";
 }
 

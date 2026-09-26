@@ -204,8 +204,8 @@ EngineOptions normalize_engine_options(EngineOptions options) {
     const std::uint64_t default_private = 2ULL * concurrency;
     cache.max_private_continuations =
         cache.max_private_continuations.value_or(static_cast<std::uint32_t>(default_private));
-    cache.max_shared_prefixes = cache.max_shared_prefixes.value_or(
-        std::max(concurrency, static_cast<std::uint32_t>(kMaximumExplicitPromptCacheMarkers)));
+    cache.max_shared_prefixes = cache.max_shared_prefixes.value_or(std::max(
+        concurrency, static_cast<std::uint32_t>(kMaximumPreparedPromptCacheCandidatesPerRequest)));
     cache.max_long_anchors_per_continuation =
         cache.max_long_anchors_per_continuation.value_or(cache.automatic_long_anchors ? 4U : 2U);
     cache.max_cache_markers_per_request     = cache.max_cache_markers_per_request.value_or(4U);

@@ -1177,7 +1177,7 @@ The table lists executable defaults. The startup example selects a long-context 
 | `--host-state-slots N` | pinned Host StateImage capacity | `8` |
 | `--host-kv-mib N` | shared pinned Host Main/Backend KV byte capacity in MiB | `8192` |
 | `--max-private-continuations N` | private continuation descriptor capacity | `2 * max-concurrency` |
-| `--max-shared-prefixes N` | shared stable-prefix descriptor capacity | `max-concurrency` |
+| `--max-shared-prefixes N` | Engine-wide shared stable-prefix descriptor capacity | `max(max-concurrency, 7)` |
 | `--max-long-anchors-per-continuation N` | private long-anchor limit per continuation | `2`, `4` with `--auto-long-anchors` |
 | `--auto-long-anchors` | the engine anchors up to that many message boundaries of every request itself, so a later request that rewrites earlier history -- a compacted or edited transcript -- resumes from the nearest retained anchor instead of root; each anchor costs a prefill split and a StateImage whether or not the client ever rewrites | off |
 | `--long-anchor-spacing N` | with `--auto-long-anchors`, the minimum token gap between automatic anchors, doubling per anchor walking back from the prompt end (anchor k sits at least `N * 2^k` tokens below the previous grid point), so short tool-loop turns do not each cost an anchor and deep history stays covered; `0` anchors every one of the last boundaries | `1024` |

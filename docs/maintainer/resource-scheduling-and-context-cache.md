@@ -522,8 +522,8 @@ frontier。栅格 candidate 只带 `EngineObserved`，既不是 declared 也不�
 prepared candidates。
 
 Shared catalog 是 Engine-wide 公共容量，不是每条 lineage 的配额。启用 context cache 时，默认 logical
-capacity 同时覆盖 active concurrency 下限和单请求最多四个显式 markers，即
-`max(max_concurrency, kMaximumExplicitPromptCacheMarkers)`；显式配置仍完整覆盖默认值。这个下限允许较早的
+capacity 同时覆盖 active concurrency 下限和单请求最多七个 prepared candidates，即
+`max(max_concurrency, kMaximumPreparedPromptCacheCandidatesPerRequest)`；显式配置仍完整覆盖默认值。这个下限允许较早的
 稳定层与较晚的滚动 marker 同时成为 owner，但是否 capture、保留或替换仍只由通用 portfolio/pressure
 planning 决定，不提供 Claude、compact 或 token-position 特例。
 

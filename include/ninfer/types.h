@@ -25,6 +25,10 @@ inline constexpr std::size_t kMaximumExplicitPromptCacheMarkers  = 4;
 // multiples of a stride that starts at one grid page and doubles until the count fits.
 inline constexpr std::uint32_t kPrefixGridCandidates = 8;
 inline constexpr std::uint32_t kPrefixGridPageTokens = 256;
+// Explicit markers plus the engine's automatic tool/leading-instruction/full-prompt candidates:
+// the shared-prefix opportunities one request can materialize on its own. Prefix-grid points are
+// excluded because they carry only observed evidence and need a second reuse domain.
+inline constexpr std::size_t kMaximumPreparedPromptCacheCandidatesPerRequest = 7;
 // Aggregate encoded image/video payload retained by one prompt, independent of item count.
 inline constexpr std::size_t kMaximumPromptMediaBytes    = 256ULL << 20;
 inline constexpr std::size_t kDefaultMediaCacheBytes     = 1ULL << 30;
@@ -201,7 +205,7 @@ struct DiagnosticObserver {
 
 struct ContextCacheOptions {
     // Engine resolves every optional once at construction. With C=max_concurrency, the enabled
-    // defaults are H=C, R=8, Host KV=8 GiB, P=2C, S=max(C,4) and L=2 (4 with automatic anchors);
+    // defaults are H=C, R=8, Host KV=8 GiB, P=2C, S=max(C,7) and L=2 (4 with automatic anchors);
     // Engine::options() returns those effective values.
     bool enabled = true;
     // Extra Device checkpoint StateImage slots H. Total Device StateImage capacity is C + H.
