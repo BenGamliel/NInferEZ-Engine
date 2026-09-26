@@ -533,6 +533,9 @@ ServeOptions parse_serve_options(int argc, char** argv) {
             options.prefill_cublas_projections = false;
         } else if (arg == "--chat-template") {
             options.chat_template_path = require_value("--chat-template");
+            if (options.chat_template_path.empty()) {
+                throw std::invalid_argument("--chat-template must not be empty");
+            }
         } else if (arg == "--no-thinking") {
             options.enable_thinking = false;
         } else if (arg == "--preserve-thinking") {

@@ -580,6 +580,13 @@ The official conversion examples select these maintained templates:
 | Qwen3.6 Dense/MoE | [qwen3_6.jinja](../tools/chat_templates/qwen3_6.jinja) | thinking on; closed-turn reasoning omitted |
 | Qwen3.8 | [qwen3_8.jinja](../tools/chat_templates/qwen3_8.jinja) | thinking on; effort `xhigh`; closed-turn reasoning retained |
 
+[froggeric_v22_5.jinja](../tools/chat_templates/froggeric_v22_5.jinja) is an unmodified copy of
+the v22.5 universal Qwen3.5/3.6/3.8 template from
+[froggeric/Qwen-Fixed-Chat-Templates](https://huggingface.co/froggeric/Qwen-Fixed-Chat-Templates)
+(Apache-2.0), offered for `--chat-template`: it maps the whole effort vocabulary itself and renders
+identically in NInfer's Jinja engine and in Python Jinja2. It is not one of the maintained
+templates above, whose behavior the frontend tests pin.
+
 Use your own Jinja file to change the artifact's default template. A startup
 [`--chat-template FILE`](cli.md#text-input) overrides the stored template.
 `generation_config.json` is preserved; sampling presets remain determined by the architecture

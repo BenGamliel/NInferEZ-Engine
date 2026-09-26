@@ -352,6 +352,7 @@ int main() {
              {"--context-cache-policy", "lru"},
              {"--context-cache-policy", "rolling", "--no-prefix-reuse"},
              {"--release-diverged-checkpoints", "--no-prefix-reuse"},
+             {"--chat-template", ""},
              {"--disk-kv-restore"},
              {"--disk-kv-directstorage"},
              {"--disk-kv-gib", "8"},
