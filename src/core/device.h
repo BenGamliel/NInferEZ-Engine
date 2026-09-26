@@ -135,6 +135,8 @@ struct DeviceContext {
     int multiprocessor_count() const noexcept;
     DeviceExecutionView execution_view() const noexcept;
     std::size_t total_vram() const noexcept;
+    // Device memory currently free on the device bound to the calling thread (cudaMemGetInfo).
+    std::size_t free_bytes() const;
     // The CUDA synchronization schedule in effect: spin, blocking, yield, or auto.
     const char* sync_mode() const;
     [[nodiscard]] std::size_t size() const noexcept;

@@ -135,6 +135,7 @@ int main() {
     memory.available_after_startup_bytes     = 180;
     memory.planned_slack_bytes               = 100;
     memory.cuda_graph_allowance_bytes        = 600;
+    memory.cuda_graph_measured_bytes         = 450;
     memory.kv_payload_bytes                  = 400;
     memory.host_state_capacity_slots         = 3;
     memory.host_state_occupied_slots         = 1;
@@ -237,6 +238,8 @@ int main() {
                   server.at("memory").at("vision_workspace").at("handoff_capacity_bytes") == 200 &&
                   server.at("memory").at("vision_workspace").at("handoff_peak_bytes") == 150,
               "Vision workspace layout missing");
+    failures += check(server.at("memory").at("cuda_graph_measured_bytes") == 450,
+                      "server_start memory does not report the measured CUDA Graph bytes");
     failures += check(server.at("memory").at("cuda_graph_allowance_bytes") == 600,
                       "CUDA Graph allowance missing");
     failures += check(server.at("memory").at("runtime_reservation_bytes") == 1600 &&
