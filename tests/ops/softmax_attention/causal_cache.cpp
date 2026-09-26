@@ -221,6 +221,7 @@ struct AttentionCase {
     float value_scale       = 1.0f;
     bool fast_prompt_kernel = false;
     bool wide_verification  = false;
+    bool small_prefill      = false;
 };
 
 enum class MappingPattern { Identity, Offset, Fragmented };
@@ -2570,7 +2571,7 @@ int run_a1_case(const Geometry& geometry, const CachePlan& plan, const Attention
     }
     const ops::CausalAttentionExecutionEnvelope envelope{
         static_cast<std::uint32_t>(total), test_case.envelope_max, test_case.fast_prompt_kernel,
-        test_case.wide_verification};
+        test_case.wide_verification, test_case.small_prefill};
 
     const HostCache initial = make_cache(geometry, plan, max_context, test_case.seed + 10u);
     HostCache expected      = initial;
@@ -2661,7 +2662,7 @@ int run_a1_case(const Geometry& geometry, KvCacheStorage storage, const Attentio
     }
     const ops::CausalAttentionExecutionEnvelope envelope{
         static_cast<std::uint32_t>(total), test_case.envelope_max, test_case.fast_prompt_kernel,
-        test_case.wide_verification};
+        test_case.wide_verification, test_case.small_prefill};
 
     const HostCache initial =
         make_cache(geometry, storage, max_context, test_case.seed + 10u, test_case.value_scale);
@@ -2761,7 +2762,7 @@ int run_a3_case(const Geometry& geometry, const CachePlan& plan, const Attention
     }
     const ops::CausalAttentionExecutionEnvelope envelope{
         static_cast<std::uint32_t>(total), test_case.envelope_max, test_case.fast_prompt_kernel,
-        test_case.wide_verification};
+        test_case.wide_verification, test_case.small_prefill};
 
     const HostCache cache_host = make_cache(geometry, plan, max_context, test_case.seed + 10u);
     const std::vector<double> reference = ideal_attention(q, cache_host, positions);
@@ -2827,7 +2828,7 @@ int run_a3_case(const Geometry& geometry, KvCacheStorage storage, const Attentio
     }
     const ops::CausalAttentionExecutionEnvelope envelope{
         static_cast<std::uint32_t>(total), test_case.envelope_max, test_case.fast_prompt_kernel,
-        test_case.wide_verification};
+        test_case.wide_verification, test_case.small_prefill};
 
     const HostCache cache_host =
         make_cache(geometry, storage, max_context, test_case.seed + 10u, test_case.value_scale);
@@ -3497,6 +3498,30 @@ int run_wide_copy_cases(KvCacheStorage storage) {
                                      .seed         = 2104u,
                                      .graph_replay = true},
                                     MappingPattern::Fragmented);
+        }
+        // Single-row prefill with the small-prefill hint: widths 17-64 over a long context take
+        // chunked small-T, a short context and widths outside 17-64 keep their routes, and the
+        // route threshold (64 or 80 visible keys per row) is crossed from both sides.
+        const std::int32_t keys_per_row = geometry.q_heads == 16 ? 80 : 64;
+        const auto prefill = [](std::int32_t width, std::int32_t base, std::uint32_t seed) {
+            return AttentionCase{.tokens        = width,
+                                 .base          = base,
+                                 .envelope_max  = static_cast<std::uint32_t>(base + width),
+                                 .seed          = seed,
+                                 .small_prefill = true};
+        };
+        for (std::int32_t width : {16, 17, 24, 33, 48, 64, 65}) {
+            failures += run_a1_case(geometry, storage, prefill(width, 8192, 2201u),
+                                    MappingPattern::Fragmented);
+            failures +=
+                run_a1_case(geometry, storage, prefill(width, 31, 2202u), MappingPattern::Offset);
+        }
+        for (std::int32_t width : {17, 40, 64}) {
+            const std::int32_t threshold = width * keys_per_row;
+            for (std::int32_t visible : {threshold - 1, threshold}) {
+                failures += run_a1_case(geometry, storage, prefill(width, visible - width, 2203u),
+                                        MappingPattern::Fragmented);
+            }
         }
     }
     return failures;

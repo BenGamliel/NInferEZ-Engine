@@ -86,8 +86,26 @@ struct Options {
     int warmup      = 5;
     int repeat      = 30;
     bool profile    = false;
+    // Execution-envelope hints: single-row widths up to 64 may take the chunked small-T route as
+    // a verification or as a prefill step, and the prompt route may take the fast INT8 kernel.
+    bool wide          = false;
+    bool small_prefill = false;
+    bool fast_prompt   = false;
     std::string csv_out;
 };
+
+// The envelope hints of the current run; every envelope this bench builds carries them.
+bool envelope_wide          = false;
+bool envelope_small_prefill = false;
+bool envelope_fast_prompt   = false;
+
+ops::CausalAttentionExecutionEnvelope bench_envelope(std::int32_t visible) {
+    return {.min_visible_keys   = static_cast<std::uint32_t>(visible),
+            .max_visible_keys   = static_cast<std::uint32_t>(visible),
+            .fast_prompt_kernel = envelope_fast_prompt,
+            .wide_verification  = envelope_wide,
+            .small_prefill      = envelope_small_prefill};
+}
 
 struct Result {
     Entry entry;
@@ -141,7 +159,9 @@ GateMode effective_gate(GateMode requested, Entry entry) noexcept {
                  "[--table-rows R0,...] "
                  "[--execution eager|graph|both] [--cache cold|warm|both] "
                  "[--mapping identity|fragmented] [--gate off|standalone|fused] "
-                 "[--warmup N] [--repeat N] [--graph-calls N] [--profile] [--csv-out PATH]\n",
+                 "[--warmup N] [--repeat N] [--graph-calls N] [--profile] [--wide] [--small-prefill] "
+                 "[--fast-prompt] "
+                 "[--csv-out PATH]\n",
                  message);
     std::exit(2);
 }
@@ -290,6 +310,12 @@ Options parse_options(int argc, char** argv) {
             options.repeat = parse_i32(next("--repeat requires a value"), 1, 10000, "--repeat");
         } else if (argument == "--profile") {
             options.profile = true;
+        } else if (argument == "--wide") {
+            options.wide = true;
+        } else if (argument == "--small-prefill") {
+            options.small_prefill = true;
+        } else if (argument == "--fast-prompt") {
+            options.fast_prompt = true;
         } else if (argument == "--csv-out") {
             options.csv_out = next("--csv-out requires a path");
         } else if (argument == "--help" || argument == "-h") {
@@ -421,8 +447,7 @@ PagedKVBatchLayerView make_batch_cache_view(DeviceBuffer& k, DeviceBuffer& v, De
 
 std::size_t workspace_capacity(const Geometry& geometry, KvCacheStorage storage,
                                std::int32_t tokens, std::int32_t batch, std::int32_t visible) {
-    const ops::CausalAttentionExecutionEnvelope envelope{static_cast<std::uint32_t>(visible),
-                                                         static_cast<std::uint32_t>(visible)};
+    const ops::CausalAttentionExecutionEnvelope envelope = bench_envelope(visible);
     return ops::causal_softmax_attention_workspace_capacity_bytes(
         {kHeadDim, geometry.query_heads, geometry.kv_heads}, storage, envelope, batch, tokens,
         tokens);
@@ -516,7 +541,7 @@ public:
           batch_cache_view_(make_batch_cache_view(cache_k_, cache_v_, cache_k_scale_,
                                                   cache_v_scale_, block_table_, geometry, storage,
                                                   padded_, physical_pages_, batch_)),
-          envelope_{static_cast<std::uint32_t>(visible_), static_cast<std::uint32_t>(visible_)} {
+          envelope_(bench_envelope(visible_)) {
         std::vector<std::int32_t> host_positions(static_cast<std::size_t>(tokens) * batch_, 0);
         for (std::int32_t row = 0; row < batch_; ++row) {
             const std::int32_t valid = valid_columns[static_cast<std::size_t>(row)];
@@ -937,6 +962,9 @@ int main(int argc, char** argv) {
             return 0;
         }
         const Options options = parse_options(argc, argv);
+        envelope_wide          = options.wide;
+        envelope_small_prefill = options.small_prefill;
+        envelope_fast_prompt   = options.fast_prompt;
         cudaStream_t stream   = nullptr;
         CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
         DeviceBuffer flush(kFlushBytes);

@@ -25,6 +25,11 @@ struct CausalAttentionExecutionEnvelope {
     // Opt into chunked single-row verification through width 64; ordinary prompts keep
     // their existing route. Workspace planning and execution must use the same hint.
     bool wide_verification = false;
+    // Single-row prefill: widths 17 through 64 take the chunked small-T route once the visible
+    // keys make it faster than the prompt route. The prompt route runs one CTA per query head and
+    // row block, so a few query rows over a long context leave most SMs idle; small-T splits the
+    // keys across CTAs instead. Workspace planning and execution must use the same hint.
+    bool small_prefill = false;
 };
 
 struct ContextAttentionExecutionEnvelope {

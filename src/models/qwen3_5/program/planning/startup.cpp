@@ -364,6 +364,9 @@ WorkspacePlan build_workspace_plan(const SequencePlanImpl& plan) {
     const std::int32_t narrowest_drafts =
         *std::min_element(round_widths.begin(), round_widths.end()) - 1;
     const ops::CausalAttentionExecutionEnvelope text_envelope{1, plan.capacity};
+    // Prefill chunks of 17 to 64 rows may take the chunked small-T route over a long context.
+    const ops::CausalAttentionExecutionEnvelope prefill_envelope{
+        .min_visible_keys = 1, .max_visible_keys = plan.capacity, .small_prefill = true};
     const ops::CausalAttentionExecutionEnvelope verify_envelope{.min_visible_keys = 1,
                                                                 .max_visible_keys = plan.capacity,
                                                                 .wide_verification =
@@ -544,7 +547,7 @@ WorkspacePlan build_workspace_plan(const SequencePlanImpl& plan) {
     WorkspaceLayoutBuilder text_prefill;
     text_common_root(text_prefill, chunk);
     target_body(text_prefill, 1, chunk, qwen3_5::TextPhase::Prefill, GdnWorkspacePath::Prefill, 1,
-                1, chunk, text_envelope);
+                1, chunk, prefill_envelope);
     if (!plan.causal_scoring) {
         scratch(text_prefill,
                 ops::sampling_workspace_capacity_bytes(
@@ -580,7 +583,7 @@ WorkspacePlan build_workspace_plan(const SequencePlanImpl& plan) {
         WorkspaceLayoutBuilder mtp_prefill;
         text_common_root(mtp_prefill, chunk);
         target_body(mtp_prefill, 1, chunk, qwen3_5::TextPhase::Prefill, GdnWorkspacePath::Prefill,
-                    1, 1, chunk, text_envelope);
+                    1, 1, chunk, prefill_envelope);
         matrix(mtp_prefill, DType::I32, 1, chunk);
         if (plan.features.vision) {
             matrix(mtp_prefill, DType::BF16, dimension(config.hidden_size), chunk);

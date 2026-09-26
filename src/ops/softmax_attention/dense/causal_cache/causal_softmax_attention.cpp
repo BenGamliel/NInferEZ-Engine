@@ -27,6 +27,12 @@ constexpr std::int32_t kMaximumSingleRowVerifyTokens = 64;
 constexpr std::int32_t kMaximumBatchSize             = 8;
 constexpr std::uint32_t kTwoChunkPromptVisibleKeys   = 512;
 constexpr std::uint32_t kThreeChunkPromptVisibleKeys = 1024;
+// Visible keys per query row from which chunked small-T beats the prompt route for a single-row
+// prefill of 17 to 64 rows. Fitted on an RTX 5090 over every KV storage, widths 17-64 and 256 to
+// 64K visible keys: each value is the multiple with the least total time lost against the
+// faster route (the crossover lies between about 32 and 128 keys per row).
+constexpr std::uint32_t kSmallPrefillKeysPerRow24 = 64;
+constexpr std::uint32_t kSmallPrefillKeysPerRow16 = 80;
 
 std::int32_t causal_attention_chunk_tokens(std::int32_t q_heads, std::int32_t width,
                                            std::int32_t batch_size, KvCacheStorage storage,
@@ -341,6 +347,15 @@ namespace detail {
 CausalAttentionRoute causal_attention_resolve_route(std::int32_t q_heads, std::int32_t width,
                                                     std::int32_t batch_size, KvCacheStorage storage,
                                                     CausalAttentionExecutionEnvelope envelope) {
+    if (envelope.small_prefill && batch_size == 1 && width > kMaximumVerifyTokens &&
+        width <= kMaximumSingleRowVerifyTokens) {
+        const std::uint32_t keys_per_row =
+            q_heads == 16 ? kSmallPrefillKeysPerRow16 : kSmallPrefillKeysPerRow24;
+        if (envelope.max_visible_keys >= static_cast<std::uint32_t>(width) * keys_per_row) {
+            return CausalAttentionRoute::ChunkedSmallT;
+        }
+        return CausalAttentionRoute::Prompt;
+    }
     const std::int32_t maximum_verify_tokens = batch_size == 1 && envelope.wide_verification
                                                    ? kMaximumSingleRowVerifyTokens
                                                    : kMaximumVerifyTokens;
@@ -506,10 +521,11 @@ std::size_t causal_softmax_attention_workspace_capacity_bytes(
         return maximum;
     };
 
-    std::size_t maximum                      = 0;
-    const std::int32_t maximum_verify_tokens = batch_size == 1 && envelope.wide_verification
-                                                   ? kMaximumSingleRowVerifyTokens
-                                                   : kMaximumVerifyTokens;
+    std::size_t maximum = 0;
+    const std::int32_t maximum_verify_tokens =
+        batch_size == 1 && (envelope.wide_verification || envelope.small_prefill)
+            ? kMaximumSingleRowVerifyTokens
+            : kMaximumVerifyTokens;
     if (min_width <= maximum_verify_tokens) {
         const std::int32_t last = std::min(max_width, maximum_verify_tokens);
         for (std::int32_t width = min_width; width <= last; ++width) {
