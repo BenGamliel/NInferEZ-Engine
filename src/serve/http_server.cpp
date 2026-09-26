@@ -1,5 +1,6 @@
 #include "serve/http_server.h"
 
+#include "product/logging/logging.h"
 #include "serve/anthropic_messages.h"
 #include "serve/http_transport.h"
 #include "serve/mcp_proxy.h"
@@ -229,11 +230,15 @@ bool matches_bearer_credential(std::string_view authorization, std::string_view 
     return authorization.substr(position, end - position) == api_key;
 }
 
-HttpServer::HttpServer(ServeOptions options, std::shared_ptr<spdlog::logger> logger)
+HttpServer::HttpServer(ServeOptions options, std::shared_ptr<spdlog::logger> logger,
+                       std::shared_ptr<product::TerminalPanel> panel)
     : options_(std::move(options)), openai_responses_store_(options_.response_store_max_records,
                                                             options_.response_store_max_bytes),
       operational_log_(logger),
       request_jsonl_(options_.request_log_jsonl, options_.artifact_path, std::move(logger)) {
+    if (options_.log_stats_panel && panel != nullptr && panel->enabled()) {
+        console_stats_ = std::make_unique<ConsoleStatsPanel>(std::move(panel));
+    }
     // cpp-httplib is thread-per-connection: a worker is held for a connection's whole
     // life, including the idle keep-alive window between requests. Sizing the pool to the
     // request-lifetime capacity alone lets idle pooled connections occupy every worker, at
@@ -287,6 +292,10 @@ void HttpServer::record_request_start(const RequestLogContext& context) {
 void HttpServer::record_request_rejected(const RequestRejectionLogContext& context) {
     request_jsonl_.write_request_rejected(context);
     operational_log_.request_rejected(context);
+    if (console_stats_) {
+        console_stats_->request_rejected(
+            make_request_failure(RequestFailurePhase::Prepare, context.error));
+    }
 }
 
 void HttpServer::record_request_done(const RequestLogContext& context,
@@ -294,12 +303,14 @@ void HttpServer::record_request_done(const RequestLogContext& context,
     request_jsonl_.write_request_done(context, outcome);
     operational_log_.request_done(context, outcome);
     metrics_.record(outcome);
+    if (console_stats_) { console_stats_->request_done(outcome); }
 }
 
 void HttpServer::record_request_failure(const RequestLogContext& context,
                                         const RequestFailure& failure) {
     request_jsonl_.write_request_error(context, failure.machine_message);
     operational_log_.request_failure(context, failure);
+    if (console_stats_) { console_stats_->request_failure(failure); }
 }
 
 void HttpServer::record_response_failure(std::uint64_t request_id, const RequestFailure& failure) {
@@ -331,6 +342,7 @@ void HttpServer::run_stats_reporter() {
         const ThroughputReport report      = make_throughput_report(
             previous, current, std::chrono::duration<double>(now - previous_time).count());
         if (report_has_activity(report)) { record_throughput(report); }
+        if (console_stats_) { console_stats_->runtime(current); }
         previous      = current;
         previous_time = now;
         next_deadline += interval;
@@ -746,6 +758,7 @@ bool HttpServer::listen() {
     if (public_model_id_.empty()) {
         throw std::logic_error("HTTP public model id is not resolved");
     }
+    if (console_stats_) { console_stats_->show(); }
     try {
         if (options_.log_stats_interval_ms != 0) {
             stats_stopping_ = false;

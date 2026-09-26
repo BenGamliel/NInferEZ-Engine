@@ -314,6 +314,8 @@ std::string serve_usage_text(const char* argv0) {
            "                                critical or off\n"
            "  --log-colours on|off          colour the console log's levels and statistics\n"
            "                                (default: levels on a console, statistics off)\n"
+           "  --log-stats-panel on|off      pin session statistics beneath the console log on\n"
+           "                                an interactive terminal (default off)\n"
            "\n"
            "NOTES\n"
            "  Sampler defaults come from the loaded model and the resolved thinking mode;\n"
@@ -470,6 +472,15 @@ ServeOptions parse_serve_options(int argc, char** argv) {
                 options.log_colours = false;
             } else {
                 throw std::invalid_argument("--log-colours accepts on or off");
+            }
+        } else if (arg == "--log-stats-panel") {
+            const std::string_view value = require_value("--log-stats-panel");
+            if (value == "on") {
+                options.log_stats_panel = true;
+            } else if (value == "off") {
+                options.log_stats_panel = false;
+            } else {
+                throw std::invalid_argument("--log-stats-panel accepts on or off");
             }
         } else if (arg == "--max-request-mib") {
             const std::uint64_t mib =

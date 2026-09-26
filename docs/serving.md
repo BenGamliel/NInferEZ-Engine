@@ -1132,6 +1132,8 @@ The table lists executable defaults. The startup example selects a long-context 
 | `--fast-prefill-kernel` | prefill an `int8` KV cache with the fast prompt-attention kernel (FP16 PV accumulation per 64-key tile) and round `--prefill-chunk` down to whole attention waves; a small perplexity cost (see [perplexity](perplexity.md)) | off |
 | `--log-stats-interval-ms N` | aggregate throughput report interval; `0` disables it | `5000` |
 | `--log-colours on\|off` | `on` colours the console log's levels and gives every statistic of the operational lines a stable colour; `off` keeps the log plain; a redirected stderr is always plain | levels coloured on a console |
+| `--log-stats-panel on\|off` | pin the session statistics panel beneath the console log on an interactive terminal | off |
+| `--log-level trace\|debug\|info\|warning\|error\|critical\|off` | pretty stderr verbosity | `info` |
 | `--device N` | CUDA device index | `0` |
 | `--devices A,B,...` | one pipeline stage per listed CUDA device (2 to 8, Linux; see the [README](../README.md#several-gpus-pipeline-stages---devices-ab)); overrides `--device` | none |
 | `--stage-layers A,B,...` | layers per stage, in `--devices` order; omitted means a split chosen from each device's free memory | memory-balanced |
@@ -1224,6 +1226,43 @@ mode and cannot be combined with any of the seven explicit context-cache capacit
 zero-valued flags.
 
 Run `./build/apps/ninfer-serve --help` for the exact option contract.
+
+Serve writes human-readable operational records to stderr using
+`YYYY-MM-DD HH:MM:SS.mmm  LEVEL  message`. Normal output covers material startup milestones,
+readiness, request lifecycle, fixed-interval throughput, and shutdown; `--log-level debug` exposes
+internal startup and resource-planning detail. A terminal may use one transient line during startup,
+but Serve throughput is always a persistent record. Redirected stderr contains no terminal control
+sequences.
+
+With `--log-stats-panel on`, on an interactive terminal that accepts VT cursor control and at `info`
+verbosity or more, Serve pins a session statistics panel beneath the scrolling records.
+Records scroll above it and remain in the scrollback; the panel is redrawn after each record and
+left on screen as ordinary output at exit. It has one row over every completed request and, once
+more than ten have completed, one over the last ten:
+
+| Column | Aggregate |
+|---|---|
+| TTFT | mean time to first token |
+| cached | prefix-cache hit tokens / prompt tokens |
+| prefill | computed (non-cached) prompt tokens / prefill seconds, in tok/s |
+| decode | output tokens after the first / decode seconds, in tok/s (per-request rate, not batch throughput) |
+| `<DRAFTER>`, acc/rnd | model-drafter (MTP or DFlash) accepted / drafted tokens, and accepted tokens per model-drafted round; n-gram rounds are excluded |
+| ngram, ng rnds | n-gram accepted / drafted tokens and verification rounds |
+| archive | n-gram archive accepted / drafted tokens, shown once the archive has drafted |
+
+The table is 77 columns wide, 86 with the archive column, so it fits a console window snapped to
+half of a 1920-pixel screen; a narrower window cuts the rows at its edge.
+
+Ratios and rates divide summed tokens by summed seconds, so each request weighs by its size. The
+title counts completed, failed, cancelled, and rejected requests and, while throughput reporting is
+enabled, the current running and waiting requests. The panel only reads the same outcomes as the
+`req#N done` records; it changes no request behavior.
+
+Pretty values use readable units and rounded rates; use the independent request JSONL for complete
+fields and full precision. Operational records never contain prompts, generated text,
+request bodies, credentials, or arbitrary client error messages.
+If a tool marker is returned to text because its structure or tool identity cannot be represented,
+Serve emits one warning with only the failure classification, never the generated markup.
 
 ## Structured request log
 

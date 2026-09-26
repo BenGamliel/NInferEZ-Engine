@@ -99,6 +99,8 @@ struct ServeOptions {
     // --log-colours on|off: on colours the console log's levels and statistics, off keeps it plain;
     // unset colours the levels on a console only.
     std::optional<bool> log_colours;
+    // --log-stats-panel on|off: pin the session statistics beneath the console log (terminal only).
+    bool log_stats_panel   = false;
     bool enable_webui      = true;  // serve a WebUI compiled in with NINFER_WEBUI_DIR
     // --webui-mcp-proxy: relay the WebUI's MCP traffic at /cors-proxy. It reaches any http host it
     // is given and carries no API key, so it stays off unless asked for by name.
