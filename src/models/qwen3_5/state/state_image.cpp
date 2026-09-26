@@ -2,7 +2,9 @@
 
 #include "core/device.h"
 
+#include <algorithm>
 #include <limits>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -458,6 +460,63 @@ void StateImageDevicePool::validate_host_layout(const StateImageHostLayout* layo
     }
 }
 
+// Visits the Device components of one slot as (rank, device pointer, packed host offset, bytes):
+// every Linear Attention layer from the shard that holds it, then the rest on rank 0.
+template <class Visit>
+void StateImageDevicePool::for_each_host_component(std::int32_t slot, Visit&& visit) const {
+    std::uint32_t layers = 0;
+    for (const auto& shard : linear_) { layers += shard->layer_count(); }
+    for (std::uint32_t layer = 0; layer < layers; ++layer) {
+        for_each_host_component(
+            slot, StateImagePart{.kind = StateImagePart::Kind::LinearLayer, .layer = layer}, visit);
+    }
+    for_each_host_component(slot, StateImagePart{.kind = StateImagePart::Kind::Rest}, visit);
+}
+
+template <class Visit>
+void StateImageDevicePool::for_each_host_component(std::int32_t slot, StateImagePart part,
+                                                   Visit&& visit) const {
+    if (part.kind == StateImagePart::Kind::LinearLayer) {
+        for (std::size_t index = 0; index < linear_.size(); ++index) {
+            const std::uint32_t first = shards_[index].first_layer;
+            if (part.layer < first || part.layer >= first + linear_[index]->layer_count()) {
+                continue;
+            }
+            const std::size_t rank    = shards_[index].rank;
+            const std::uint32_t local = part.layer - first;
+            const Tensor conv         = linear_[index]->conv_slot(local, slot);
+            visit(rank, conv.data,
+                  host_layout_.linear_conv.offset +
+                      part.layer * host_layout_.linear_conv_layer_bytes,
+                  conv.bytes());
+            const Tensor recurrent = linear_[index]->recurrent_slot(local, slot);
+            visit(rank, recurrent.data,
+                  host_layout_.linear_recurrent.offset +
+                      part.layer * host_layout_.linear_recurrent_layer_bytes,
+                  recurrent.bytes());
+            return;
+        }
+        throw std::out_of_range("StateImage linear layer is out of range");
+    }
+    const Tensor hidden = continuation_hidden_slot(slot);
+    visit(std::size_t{0}, hidden.data, host_layout_.continuation_hidden.offset, hidden.bytes());
+    if (dflash_local_) {
+        for (std::uint32_t layer = 0; layer < dflash_local_->layer_count(); ++layer) {
+            const CyclicKVCacheLayerView view = dflash_local_->layer_view(layer);
+            const Tensor k                    = view.k.slice(3, slot, 1);
+            const Tensor v                    = view.v.slice(3, slot, 1);
+            visit(std::size_t{0}, k.data,
+                  host_layout_.dflash_local_k->offset +
+                      layer * host_layout_.dflash_local_layer_bytes,
+                  k.bytes());
+            visit(std::size_t{0}, v.data,
+                  host_layout_.dflash_local_v->offset +
+                      layer * host_layout_.dflash_local_layer_bytes,
+                  v.bytes());
+        }
+    }
+}
+
 void StateImageDevicePool::copy_to_host(std::int32_t source, HostStateImageView destination,
                                         RankStreams streams) const {
     validate_slot(source, slot_count(), "StateImage copy-to-host source is out of range");
@@ -547,6 +606,86 @@ void StateImageDevicePool::copy_from_host(HostStateImageConstView source, std::i
                 v.bytes(), cudaMemcpyHostToDevice, stream));
         }
     }
+}
+
+namespace {
+
+// Visits the pieces of the host byte range [offset, offset + bytes) that fall in each fixed-size
+// segment of a segmented host image.
+template <class Visit>
+void split_segments(std::size_t offset, std::size_t bytes, std::size_t segment_bytes,
+                    Visit&& visit) {
+    std::size_t done = 0;
+    while (done < bytes) {
+        const std::size_t position = offset + done;
+        const std::size_t segment  = position / segment_bytes;
+        const std::size_t within   = position % segment_bytes;
+        const std::size_t count    = std::min(bytes - done, segment_bytes - within);
+        visit(segment, within, done, count);
+        done += count;
+    }
+}
+
+void validate_segments(std::size_t segment_count, std::size_t segment_bytes,
+                       std::size_t image_bytes) {
+    if (segment_bytes == 0 || segment_count == 0 ||
+        segment_count < 1U + (image_bytes - 1U) / segment_bytes) {
+        throw std::invalid_argument("segmented StateImage host copy does not cover the image");
+    }
+}
+
+} // namespace
+
+void StateImageDevicePool::copy_to_host_segments(std::int32_t source,
+                                                 std::span<std::byte* const> segments,
+                                                 std::size_t segment_bytes,
+                                                 RankStreams streams) const {
+    validate_slot(source, slot_count(), "StateImage segmented D2H source is out of range");
+    validate_segments(segments.size(), segment_bytes, host_layout_.image_bytes);
+    for_each_host_component(
+        source, [&](std::size_t rank, void* device, std::size_t offset, std::size_t bytes) {
+            split_segments(
+                offset, bytes, segment_bytes,
+                [&](std::size_t segment, std::size_t within, std::size_t done, std::size_t count) {
+                    CUDA_CHECK(cudaMemcpyAsync(segments[segment] + within,
+                                               static_cast<const std::byte*>(device) + done, count,
+                                               cudaMemcpyDeviceToHost, streams[rank]));
+                });
+        });
+}
+
+void StateImageDevicePool::copy_from_host_segments(std::span<const std::byte* const> segments,
+                                                   std::size_t segment_bytes,
+                                                   std::int32_t destination, RankStreams streams) {
+    std::uint32_t layers = 0;
+    for (const auto& shard : linear_) { layers += shard->layer_count(); }
+    for (std::uint32_t layer = 0; layer < layers; ++layer) {
+        copy_from_host_segments(
+            segments, segment_bytes, destination,
+            StateImagePart{.kind = StateImagePart::Kind::LinearLayer, .layer = layer}, streams);
+    }
+    copy_from_host_segments(segments, segment_bytes, destination,
+                            StateImagePart{.kind = StateImagePart::Kind::Rest}, streams);
+}
+
+void StateImageDevicePool::copy_from_host_segments(std::span<const std::byte* const> segments,
+                                                   std::size_t segment_bytes,
+                                                   std::int32_t destination, StateImagePart part,
+                                                   RankStreams streams) {
+    validate_slot(destination, slot_count(),
+                  "StateImage segmented H2D destination is out of range");
+    validate_segments(segments.size(), segment_bytes, host_layout_.image_bytes);
+    for_each_host_component(
+        destination, part,
+        [&](std::size_t rank, void* device, std::size_t offset, std::size_t bytes) {
+            split_segments(
+                offset, bytes, segment_bytes,
+                [&](std::size_t segment, std::size_t within, std::size_t done, std::size_t count) {
+                    CUDA_CHECK(cudaMemcpyAsync(static_cast<std::byte*>(device) + done,
+                                               segments[segment] + within, count,
+                                               cudaMemcpyHostToDevice, streams[rank]));
+                });
+        });
 }
 
 } // namespace ninfer::models::qwen3_5

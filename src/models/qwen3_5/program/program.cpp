@@ -400,6 +400,8 @@ bool Program::vision_pending(SequenceHandle sequence) const noexcept {
     return impl_->vision_pending(sequence);
 }
 
+bool Program::wait_context_transfer() noexcept { return impl_->wait_context_transfer(); }
+
 PrefillProgress Program::advance_prefill(SequenceHandle sequence,
                                          runtime::ExecutionTiming* failed_timing) {
     return impl_->advance_prefill(sequence, failed_timing);
@@ -539,11 +541,60 @@ ReleaseResult Program::release_shared_prefix(SharedPrefixHandle&& shared) noexce
 }
 
 std::optional<PhysicalUsageSnapshot> Program::fail_all_cleanup() noexcept {
-    return impl_->fail_all_cleanup();
+    return impl_->fail_all_cleanup(detail::ProgramCleanup::Failure);
+}
+
+std::optional<PhysicalUsageSnapshot> Program::shutdown_cleanup() noexcept {
+    return impl_->fail_all_cleanup(detail::ProgramCleanup::Shutdown);
 }
 
 bool Program::isolated_request_feasible(const RequestBasePlan& base) const noexcept {
     return impl_->isolated_request_feasible(base);
+}
+
+bool Program::hybrid_prefix_cache() const noexcept { return impl_->hybrid_prefix_cache(); }
+
+HybridAdmissionQuote Program::hybrid_quote(const PreparedPrompt& prompt,
+                                           const RequestBasePlan& base,
+                                           runtime::LaneId destination) {
+    return impl_->hybrid_quote(PreparedPromptAccess::view(prompt), base, destination);
+}
+
+runtime::ContextTransactionReserveStatus
+Program::hybrid_reserve_materialization(HybridAdmissionQuote&& quote, PreparedPrompt&& prompt,
+                                        runtime::CancellationFlagView cancellation) {
+    // The prompt is taken only once the reservation will succeed: a rejected quote leaves the
+    // waiting request intact for a later admission attempt.
+    if (!impl_->hybrid_reservable(quote, cancellation)) {
+        return runtime::ContextTransactionReserveStatus::Aborted;
+    }
+    return impl_->hybrid_reserve_materialization(
+        std::move(quote), PreparedPromptAccess::view(prompt),
+        [&prompt]() { return PreparedPromptAccess::take(std::move(prompt)); }, cancellation);
+}
+
+std::uint32_t Program::hybrid_reclaim_device_kv(std::uint32_t main_pages,
+                                                std::uint32_t backend_pages) {
+    return impl_->hybrid_reclaim_device_kv(main_pages, backend_pages);
+}
+
+HybridPrefixCacheStats Program::hybrid_stats() const noexcept { return impl_->hybrid_stats(); }
+
+void Program::set_hybrid_cost(const runtime::prefix_cache::CacheCostModel& cost) {
+    impl_->set_hybrid_cost(cost);
+}
+
+void Program::set_hybrid_coalesce_wait_limit(double seconds) {
+    impl_->set_hybrid_coalesce_wait_limit(seconds);
+}
+
+HybridCachePersistence Program::attach_hybrid_cache_file(const std::filesystem::path& path,
+                                                         std::string fingerprint) {
+    return impl_->attach_hybrid_cache_file(path, std::move(fingerprint));
+}
+
+std::optional<HybridCachePersistence> Program::hybrid_shutdown_save() const {
+    return impl_->hybrid_shutdown_save();
 }
 
 runtime::ProgramResourceRevision Program::resource_revision() const noexcept {

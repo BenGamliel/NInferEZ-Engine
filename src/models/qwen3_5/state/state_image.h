@@ -138,6 +138,18 @@ struct StateImageDeviceSlotView {
     std::optional<CyclicKVCacheSlotView> dflash_local;
 };
 
+// A part of one StateImage a consumer can take on its own: one linear-attention layer's conv and
+// recurrent state, or everything else (the continuation hidden and any DFlash local state).
+struct StateImagePart {
+    enum class Kind : std::uint8_t {
+        LinearLayer,
+        Rest,
+    };
+
+    Kind kind           = Kind::Rest;
+    std::uint32_t layer = 0;
+};
+
 /**
  * Caller-backed fixed storage for Qwen3.6 continuation state.
  *
@@ -196,10 +208,28 @@ public:
                       RankStreams streams = {}) const;
     void copy_from_host(HostStateImageConstView source, std::int32_t destination,
                         RankStreams streams = {});
+    // Segmented host images: the packed host image byte o lives at
+    // segments[o / segment_bytes] + o % segment_bytes (fixed-size slabs of a shared pinned pool).
+    void copy_to_host_segments(std::int32_t source, std::span<std::byte* const> segments,
+                               std::size_t segment_bytes, RankStreams streams = {}) const;
+    void copy_from_host_segments(std::span<const std::byte* const> segments,
+                                 std::size_t segment_bytes, std::int32_t destination,
+                                 RankStreams streams = {});
+    // One part of the image, so a restore can land the state a forward pass reads first ahead of
+    // the rest.
+    void copy_from_host_segments(std::span<const std::byte* const> segments,
+                                 std::size_t segment_bytes, std::int32_t destination,
+                                 StateImagePart part, RankStreams streams);
 
 private:
     void validate_host_layout(const StateImageHostLayout* layout, const std::byte* data) const;
     [[nodiscard]] LinearAttentionStatePool* single_shard() const;
+    // Visit Device components of one slot as (rank, device pointer, packed host offset, bytes):
+    // all of them, or those of one part.
+    template <class Visit>
+    void for_each_host_component(std::int32_t slot, Visit&& visit) const;
+    template <class Visit>
+    void for_each_host_component(std::int32_t slot, StateImagePart part, Visit&& visit) const;
 
     std::vector<StateImageShard> shards_;
     std::vector<std::unique_ptr<LinearAttentionStatePool>> linear_;

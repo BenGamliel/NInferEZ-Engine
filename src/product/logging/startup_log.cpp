@@ -314,6 +314,15 @@ void StartupLogRenderer::engine_ready(const LoadSummary& load) {
                          context_cost_preset_source_name(load.context_cost.transfer_source),
                          context_cost_preset_source_name(load.context_cost.prefill_source),
                          load.prefill_signature);
+    if (load.prefix_cache.restored) {
+        impl_->logger->info("prefix cache restored | {} blocks | {} snapshots | {} | {}",
+                            format_pretty_count(load.prefix_cache.blocks),
+                            format_pretty_count(load.prefix_cache.snapshots),
+                            format_pretty_bytes(load.prefix_cache.bytes),
+                            format_pretty_duration(load.prefix_cache.seconds));
+    } else if (load.prefix_cache.attempted) {
+        impl_->logger->info("prefix cache not restored | {}", load.prefix_cache.message);
+    }
 }
 
 } // namespace ninfer::product

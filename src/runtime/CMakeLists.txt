@@ -14,6 +14,9 @@ add_library(ninfer_runtime_support STATIC
   ${CMAKE_CURRENT_BINARY_DIR}/engine/device_profiles_builtin.cpp
   engine/kv_capacity.cpp
   engine/public_types.cpp
+  prefix_cache/block_hash.cpp
+  prefix_cache/prefix_index.cpp
+  prefix_cache/tap_planner.cpp
 )
 ninfer_internal_includes(ninfer_runtime_support)
 target_link_libraries(ninfer_runtime_support PUBLIC ninfer_core ninfer_ops PRIVATE ninfer::json)

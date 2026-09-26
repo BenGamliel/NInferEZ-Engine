@@ -4,8 +4,12 @@
 #include "runtime/contract/execution.h"
 #include "runtime/contract/resources.h"
 #include "models/qwen3_5/frontend/prepared_prompt.h"
+#include "runtime/prefix_cache/cost.h"
 
 #include <cstddef>
+#include <string_view>
+#include <string>
+#include <filesystem>
 #include <cstdint>
 #include <array>
 #include <memory>
@@ -137,6 +141,8 @@ struct RequestBasePlanImpl;
 
 struct PressurePlanningSessionImpl;
 
+struct HybridQuoteImpl;
+
 class ProgramImpl;
 
 struct RuntimeContractAccess;
@@ -206,6 +212,56 @@ public:
 
     friend SequencePlanner make_sequence_planner(const execution::Parameters&, DeviceContext&,
                                                  const EngineOptions&);
+};
+
+// Hybrid prefix cache admission quote (docs/maintainer/hybrid-prefix-cache-spec.md §6). The
+// summary already carries the selected reuse frontier; it is exact at admission.
+struct HybridAdmissionQuote {
+    runtime::Readiness readiness = runtime::Readiness::TemporarilyBlocked;
+    runtime::LaneId destination{};
+    runtime::RequestPlanSummary summary;
+    std::shared_ptr<detail::HybridQuoteImpl> impl;
+};
+
+// Outcome of saving or restoring the hybrid prefix cache's Host tier.
+struct HybridCachePersistence {
+    bool ok = false;
+    std::string message;
+    std::uint64_t blocks    = 0;
+    std::uint64_t snapshots = 0;
+    std::uint64_t bytes     = 0;
+    double seconds          = 0.0;
+};
+
+struct HybridPrefixCacheStats {
+    std::uint32_t nodes                      = 0;
+    std::uint32_t snapshots                  = 0;
+    std::uint32_t device_resident_blocks     = 0;
+    std::uint32_t device_evictable_blocks    = 0;
+    std::uint32_t host_slabs                 = 0;
+    std::uint32_t host_free_slabs            = 0;
+    std::uint64_t host_slab_bytes            = 0;
+    std::uint32_t free_device_snapshot_slots = 0;
+    std::uint64_t admissions                 = 0;
+    std::uint64_t snapshot_hits              = 0;
+    std::uint64_t reused_tokens              = 0;
+    std::uint64_t blocks_inserted            = 0;
+    std::uint64_t blocks_reattached          = 0;
+    std::uint64_t blocks_duplicate           = 0;
+    std::uint64_t taps_created               = 0;
+    std::uint64_t taps_skipped               = 0;
+    std::uint64_t endpoints_created          = 0;
+    std::uint64_t host_image_writes          = 0;
+    std::uint64_t host_block_writes          = 0;
+    std::uint64_t host_image_restores        = 0;
+    std::uint64_t host_block_restores        = 0;
+    std::uint64_t host_tail_restores         = 0;
+    std::uint64_t host_write_bytes           = 0;
+    std::uint64_t host_restore_bytes         = 0;
+    std::uint64_t evicted_blocks             = 0;
+    std::uint64_t host_snapshot_evictions    = 0;
+    std::uint64_t host_dead_reclaims         = 0;
+    std::uint64_t unbacked_node_losses       = 0;
 };
 
 class RequestBasePlan {
@@ -855,6 +911,9 @@ struct MaterializationResult {
     runtime::ContextOperationCounts operations;
     // Nonempty on Aborted when a context-cache store rejected the placement; names the store.
     std::string failure;
+    // Hybrid admissions report their own diagnostics; Legacy ones are priced by the
+    // ResourceManager.
+    MaterializationDiagnostics diagnostics;
 };
 
 using ContextTransactionProgress =
@@ -954,6 +1013,10 @@ public:
     // True while the sequence's next media item is still encoding in a concurrent overlay Vision
     // window; the Engine gives that lane no prefill unit until it completes.
     [[nodiscard]] bool vision_pending(SequenceHandle sequence) const noexcept;
+    // Blocks until the open context transaction's submitted Host transfer completes, so an idle
+    // worker resumes the transaction as soon as it can progress. Returns false, without
+    // waiting, when no transfer is in flight. A failed transfer surfaces at the next progress.
+    [[nodiscard]] bool wait_context_transfer() noexcept;
     [[nodiscard]] PrefillProgress
     advance_prefill(SequenceHandle sequence, runtime::ExecutionTiming* failed_timing = nullptr);
     [[nodiscard]] CaptureAssessment
@@ -1035,8 +1098,40 @@ public:
     // Host KV extent outlives its owner; the usage that survived the ordinary cleanup is returned
     // then, for diagnostics.
     [[nodiscard]] std::optional<PhysicalUsageSnapshot> fail_all_cleanup() noexcept;
+    // fail_all_cleanup for the Engine's orderly stop. With a hybrid cache file attached, the Host
+    // tier is saved once every lane has written its blocks through and before the cleanup drops
+    // it; hybrid_shutdown_save() reports the result.
+    [[nodiscard]] std::optional<PhysicalUsageSnapshot> shutdown_cleanup() noexcept;
 
     [[nodiscard]] bool isolated_request_feasible(const RequestBasePlan& base) const noexcept;
+
+    // Hybrid prefix cache mode (ContextCacheMode::Hybrid). Admission runs as the same context
+    // transaction the Engine drives for Legacy materialization: quote, reserve, then
+    // progress_context_transaction publishes the started sequence.
+    [[nodiscard]] bool hybrid_prefix_cache() const noexcept;
+    [[nodiscard]] HybridAdmissionQuote hybrid_quote(const PreparedPrompt& prompt,
+                                                    const RequestBasePlan& base,
+                                                    runtime::LaneId destination);
+    [[nodiscard]] runtime::ContextTransactionReserveStatus
+    hybrid_reserve_materialization(HybridAdmissionQuote&& quote, PreparedPrompt&& prompt,
+                                   runtime::CancellationFlagView cancellation);
+    // Evicts cached Device blocks until the pools can give the requested pages. Returns the
+    // number of cached blocks released.
+    [[nodiscard]] std::uint32_t hybrid_reclaim_device_kv(std::uint32_t main_pages,
+                                                         std::uint32_t backend_pages);
+    [[nodiscard]] HybridPrefixCacheStats hybrid_stats() const noexcept;
+    // Installs the Engine's calibrated machine model for hybrid admission choice and eviction.
+    void set_hybrid_cost(const runtime::prefix_cache::CacheCostModel& cost);
+    // Longest predicted wait for a prefilling sibling's snapshot that admission may choose over
+    // prefilling the shared prefix again. Zero disables coalescing.
+    void set_hybrid_coalesce_wait_limit(double seconds);
+    // Restores a saved Host tier before the first request and attaches the file, so
+    // shutdown_cleanup saves the tier back to it. `fingerprint` names everything the saved bytes
+    // depend on.
+    [[nodiscard]] HybridCachePersistence attach_hybrid_cache_file(const std::filesystem::path& path,
+                                                                  std::string fingerprint);
+    [[nodiscard]] std::optional<HybridCachePersistence> hybrid_shutdown_save() const;
+
     [[nodiscard]] runtime::ProgramResourceRevision resource_revision() const noexcept;
     [[nodiscard]] PhysicalUsageSnapshot physical_usage() const noexcept;
     [[nodiscard]] MemorySummary memory_summary() const noexcept;

@@ -371,6 +371,8 @@ Json materialization_json(const ninfer::MaterializationDiagnostics& diagnostics)
         {"search_stop_phase",
          ninfer::materialization_search_phase_name(diagnostics.search_stop_phase)},
         {"search_boundary_limited", diagnostics.search_boundary_limited},
+        {"cached_prefix_tokens", diagnostics.cached_prefix_tokens},
+        {"restored_host_bytes", diagnostics.restored_host_bytes},
     };
 }
 
@@ -785,7 +787,18 @@ std::string format_server_start_json(
              {"recency_eviction", cache.recency_eviction},
              {"kv_lease_growth", cache.kv_lease_growth},
              {"automatic_long_anchors", cache.automatic_long_anchors},
-             {"long_anchor_min_spacing_tokens", cache.long_anchor_min_spacing_tokens}}}};
+             {"long_anchor_min_spacing_tokens", cache.long_anchor_min_spacing_tokens},
+             {"mode", cache.mode == ContextCacheMode::Hybrid ? "hybrid" : "legacy"},
+             {"host_cache_budget_bytes",
+              cache.host_cache_budget_bytes ? Json(*cache.host_cache_budget_bytes) : Json(nullptr)},
+             {"hybrid",
+              cache.mode == ContextCacheMode::Hybrid
+                  ? Json{{"device_snapshot_slots", cache.hybrid.device_snapshot_slots.value_or(0)},
+                         {"max_new_taps", cache.hybrid.max_new_taps.value_or(0)},
+                         {"tap_ladder_tokens", cache.hybrid.tap_ladder_tokens.value_or(0)},
+                         {"tap_min_gap_tokens", cache.hybrid.tap_min_gap_tokens.value_or(0)},
+                         {"persistent", !cache.hybrid.persistent_file.empty()}}
+                  : Json(nullptr)}}}};
     record["sampling_defaults"] =
         Json{{"thinking", preset_json(sampling_defaults.thinking)},
              {"non_thinking", preset_json(sampling_defaults.non_thinking)},
@@ -1088,6 +1101,38 @@ std::string format_throughput_json(const std::string& server_instance_id, std::u
                            {"shared_active_references", current.shared_active_references}}},
         {"actual_transfer_seconds", monotonic_delta(previous.actual_context_transfer_seconds,
                                                     current.actual_context_transfer_seconds)}};
+    // Hybrid prefix cache (--use-alt-prefix-caching): absolute occupancy, per-interval events.
+    if (current.hybrid_snapshots != 0 || current.hybrid_tree_blocks != 0 ||
+        current.hybrid_blocks_inserted != 0) {
+        const auto delta = [&](std::uint64_t RuntimeStats::* field) {
+            return monotonic_delta(previous.*field, current.*field);
+        };
+        record["context_cache"]["hybrid"] =
+            Json{{"device_blocks", current.hybrid_cached_blocks},
+                 {"evictable_blocks", current.hybrid_evictable_blocks},
+                 {"tree_blocks", current.hybrid_tree_blocks},
+                 {"snapshots", current.hybrid_snapshots},
+                 {"host_capacity_bytes", current.hybrid_host_capacity_bytes},
+                 {"host_used_bytes", current.hybrid_host_used_bytes},
+                 {"snapshot_hits", delta(&RuntimeStats::hybrid_snapshot_hits)},
+                 {"reused_tokens", delta(&RuntimeStats::hybrid_reused_tokens)},
+                 {"blocks_inserted", delta(&RuntimeStats::hybrid_blocks_inserted)},
+                 {"blocks_reattached", delta(&RuntimeStats::hybrid_blocks_reattached)},
+                 {"blocks_duplicate", delta(&RuntimeStats::hybrid_blocks_duplicate)},
+                 {"taps_created", delta(&RuntimeStats::hybrid_taps_created)},
+                 {"taps_skipped", delta(&RuntimeStats::hybrid_taps_skipped)},
+                 {"endpoints_created", delta(&RuntimeStats::hybrid_endpoints_created)},
+                 {"host_image_writes", delta(&RuntimeStats::hybrid_host_image_writes)},
+                 {"host_block_writes", delta(&RuntimeStats::hybrid_host_block_writes)},
+                 {"host_image_restores", delta(&RuntimeStats::hybrid_host_image_restores)},
+                 {"host_block_restores", delta(&RuntimeStats::hybrid_host_block_restores)},
+                 {"host_write_bytes", delta(&RuntimeStats::hybrid_host_write_bytes)},
+                 {"host_restore_bytes", delta(&RuntimeStats::hybrid_host_restore_bytes)},
+                 {"evicted_blocks", delta(&RuntimeStats::hybrid_evicted_blocks)},
+                 {"host_snapshot_evictions", delta(&RuntimeStats::hybrid_host_snapshot_evictions)},
+                 {"host_dead_reclaims", delta(&RuntimeStats::hybrid_host_dead_reclaims)},
+                 {"unbacked_node_losses", delta(&RuntimeStats::hybrid_unbacked_node_losses)}};
+    }
     return record.dump();
 }
 

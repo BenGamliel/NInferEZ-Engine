@@ -62,6 +62,9 @@ struct PrefillContext {
     const qwen3_5::DFlashDecodeIngress* dflash_host_ingress = nullptr;
     // Pinned host destination for the logits behind the first generated token, or null.
     void* first_token_logits = nullptr;
+    // Per-model-layer events of a Host restore still landing: the chunk's first pass over the
+    // layer stack waits for each layer's copies.
+    std::span<const cudaEvent_t> layer_ready;
 };
 
 struct OrdinaryBatchContext {

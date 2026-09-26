@@ -16,6 +16,7 @@
 #include "models/qwen3_5/program/storage/host_kv_store.h"
 #include "models/qwen3_5/program/storage/kv_store.h"
 #include "models/qwen3_5/program/storage/state_store.h"
+#include "models/qwen3_5/program/prefix/hybrid_cache.h"
 #include "models/qwen3_5/program/prefix_identity.h"
 #include "models/qwen3_5/program/planning/resource_projection.h"
 #include "models/qwen3_5/execution/text.h"
@@ -24,8 +25,12 @@
 #include "models/qwen3_5/program/ngram_proposer.h"
 
 #include <algorithm>
+#include <string_view>
+#include <filesystem>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
+#include <functional>
 #include <array>
 #include <chrono>
 #include <limits>
@@ -281,6 +286,60 @@ struct AdmissionCandidateImpl : ResourceCandidateState {
 
 struct CapturePressureCandidateImpl : ResourceCandidateState {};
 
+// Hybrid prefix cache admission decision (docs/maintainer/hybrid-prefix-cache-spec.md §6). The
+// base-plan facts the start path needs are copied so the quote outlives the Engine's base plan.
+struct HybridQuoteImpl {
+    runtime::RequestPlanSummary summary;
+    ops::SamplingConfig sampling;
+    std::uint32_t text_kv_page_entitlement    = 0;
+    std::uint32_t backend_kv_page_entitlement = 0;
+    std::shared_ptr<const qwen3_5::VisionControlPlan> vision_control_plan;
+    runtime::PrefillWork root_rebuild_work;
+    std::uint32_t root_rebuild_tail_begin = 0;
+    runtime::prefix_cache::SnapshotRef snapshot; // invalid: root
+    std::uint32_t reuse_frontier = 0;
+    // Longest prompt prefix held as cached full blocks, reusable or not.
+    std::uint32_t cached_prefix_tokens = 0;
+    std::uint32_t destination          = 0;
+    std::uint64_t destination_epoch    = 0;
+};
+
+// A prefill tap whose StateImage is captured but whose snapshot waits for the blocks it anchors
+// on: a frontier inside a block needs that block complete, and an MTP backend trails the text
+// frontier by one token, so even a page-aligned frontier waits for its last block's backend page.
+struct HybridPendingTap {
+    std::uint32_t frontier = 0;
+    StateImageHandle image;
+    std::uint32_t slot = 0; // staging device snapshot slot
+};
+
+// Per-lane hybrid bookkeeping for the active sequence.
+struct HybridLaneState {
+    bool active  = false;
+    bool publish = false;
+    // Root path of full blocks this sequence pins, in prompt order. Blocks past the reuse
+    // frontier are appended as the sequence commits them.
+    std::vector<runtime::prefix_cache::NodeRef> path;
+    std::uint64_t path_hash = runtime::prefix_cache::kRootLookupHash;
+    // Extra key of every full prompt block (Vision identity), empty for text-only prompts.
+    std::vector<std::uint64_t> prompt_extras;
+    // Extra key of blocks after the last full prompt block: every Vision item precedes them.
+    std::uint64_t trailing_extra = 0;
+    std::vector<runtime::prefix_cache::PlannedTap> taps;
+    std::size_t next_tap = 0;
+    std::vector<runtime::prefix_cache::TapExclusion> exclusions;
+    std::vector<HybridPendingTap> pending;
+    // Most recent snapshot frontier this sequence reused or captured.
+    std::uint32_t last_capture = 0;
+    // Deepest snapshot frontier known on this path (reused or created by this sequence).
+    std::uint32_t deepest_snapshot = 0;
+    // The Host restore this sequence was admitted from (0 without one). Its first prefill pass
+    // queues behind the restore's per-layer events; releasing the lane queues behind the whole
+    // restore if it may still be landing.
+    std::uint64_t restore_ticket = 0;
+    bool restore_layers_pending  = false;
+};
+
 } // namespace ninfer::models::qwen3_5::detail
 
 namespace ninfer::models::qwen3_5::detail {
@@ -306,6 +365,13 @@ struct PendingCandidate {
     std::uint32_t produced      = 0;
     // Columns the speculative round recorded GDN transitions at; the fold reads them back at it.
     std::uint32_t record_width = 0;
+};
+
+// Why every owner is being dropped: a failure discards everything; an orderly shutdown first saves
+// the hybrid Host tier when a cache file is attached.
+enum class ProgramCleanup : std::uint8_t {
+    Failure,
+    Shutdown,
 };
 
 enum class Lifecycle : std::uint8_t {
@@ -480,6 +546,20 @@ struct RequestControl {
     };
 
     std::optional<Prefill> prefill;
+
+    // Returns the request slot to Empty once its lane's resources have been released.
+    void retire() noexcept {
+        prefill.reset();
+        lifecycle            = Lifecycle::Empty;
+        pending              = {};
+        active_resources     = {};
+        optional_resources   = {};
+        publish_continuation = true;
+        lease_settled        = false;
+        lease_space_limited  = false;
+        lease_minimum_target = {};
+        lease_ceiling        = 0;
+    }
 };
 
 class ProgramImpl {
@@ -556,6 +636,7 @@ public:
     // True while this sequence waits for a media item submitted to a concurrent overlay window:
     // the lane must not be given a prefill unit, and every other lane keeps running.
     [[nodiscard]] bool vision_pending(SequenceHandle sequence) const noexcept;
+    [[nodiscard]] bool wait_context_transfer() noexcept;
     [[nodiscard]] bool try_claim_seal_window() noexcept;
     void release_seal_window() noexcept;
     [[nodiscard]] PrefillProgress advance_prefill(SequenceHandle sequence,
@@ -602,11 +683,40 @@ public:
     [[nodiscard]] AbortResult abort(SequenceHandle sequence) noexcept;
     [[nodiscard]] ReleaseResult release_continuation(ContinuationHandle&& continuation) noexcept;
     [[nodiscard]] ReleaseResult release_shared_prefix(SharedPrefixHandle&& shared) noexcept;
-    [[nodiscard]] std::optional<qwen3_5::PhysicalUsageSnapshot> fail_all_cleanup() noexcept;
+    [[nodiscard]] std::optional<qwen3_5::PhysicalUsageSnapshot>
+    fail_all_cleanup(ProgramCleanup cleanup) noexcept;
     [[nodiscard]] bool context_stores_idle() const noexcept;
     [[nodiscard]] bool rebuild_context_stores() noexcept;
     [[nodiscard]] detail::PhysicalResources admission_capacity() const noexcept;
     [[nodiscard]] bool isolated_request_feasible(const RequestBasePlan& base) const noexcept;
+
+    [[nodiscard]] bool hybrid_prefix_cache() const noexcept { return hybrid_ != nullptr; }
+
+    [[nodiscard]] HybridAdmissionQuote hybrid_quote(const PreparedPromptData& prompt,
+                                                    const RequestBasePlan& base,
+                                                    runtime::LaneId destination);
+    [[nodiscard]] bool hybrid_reservable(const HybridAdmissionQuote& quote,
+                                         runtime::CancellationFlagView cancellation) const noexcept;
+    [[nodiscard]] runtime::ContextTransactionReserveStatus
+    hybrid_reserve_materialization(HybridAdmissionQuote&& quote, const PreparedPromptData& prompt,
+                                   const std::function<PreparedPromptData()>& take_prompt,
+                                   runtime::CancellationFlagView cancellation);
+    [[nodiscard]] std::uint32_t hybrid_reclaim_device_kv(std::uint32_t main_pages,
+                                                         std::uint32_t backend_pages);
+    [[nodiscard]] HybridPrefixCacheStats hybrid_stats() const noexcept;
+    // Installs the Engine's calibrated machine model for hybrid admission and eviction.
+    void set_hybrid_cost(const runtime::prefix_cache::CacheCostModel& cost);
+
+    void set_hybrid_coalesce_wait_limit(double seconds) noexcept {
+        hybrid_coalesce_wait_seconds_ = seconds > 0.0 ? seconds : 0.0;
+    }
+
+    [[nodiscard]] HybridCachePersistence attach_hybrid_cache_file(const std::filesystem::path& path,
+                                                                  std::string fingerprint);
+
+    [[nodiscard]] std::optional<HybridCachePersistence> hybrid_shutdown_save() const {
+        return hybrid_shutdown_save_;
+    }
 
     [[nodiscard]] runtime::ProgramResourceRevision resource_revision() const noexcept {
         return resource_revision_;
@@ -1055,8 +1165,31 @@ private:
 
     std::uint64_t next_capture_offer_id_ = 1;
 
+    struct HybridMaterializationTransaction {
+        std::shared_ptr<HybridQuoteImpl> quote;
+        PreparedPromptData prompt;
+        // Staged by the first progress step: the pinned path and snapshot, the Device pages the
+        // restore and the fork consume, the reserved StateImage destination and whether Host
+        // slabs filled it. A Host restore in flight keeps the transaction in progress.
+        bool staged          = false;
+        bool snapshot_pinned = false;
+        bool state_restored  = false;
+        bool terminal        = false;
+        std::vector<runtime::prefix_cache::NodeRef> path;
+        std::vector<std::uint64_t> hashes;
+        std::vector<std::uint64_t> extras;
+        std::optional<StateImageHandle> state;
+        std::optional<DeviceKVPageReservation> text_pages;
+        std::optional<DeviceKVPageReservation> backend_pages;
+        std::uint64_t restore_bytes = 0;
+        // Names the landing Host restore whose per-layer events the lane's first prefill pass
+        // waits on (0 without one).
+        std::uint64_t restore_ticket = 0;
+    };
+
     using ContextTransaction =
-        std::variant<std::monostate, MaterializationTransaction, ActiveCaptureTransaction>;
+        std::variant<std::monostate, MaterializationTransaction, ActiveCaptureTransaction,
+                     HybridMaterializationTransaction>;
     ContextTransaction context_transaction_;
 
     [[nodiscard]] MaterializationResult
@@ -1072,6 +1205,62 @@ private:
                                 runtime::CancellationFlagView cancellation);
 
     std::array<CudaEventTimer, 3> context_transfer_timers_;
+
+    // Hybrid prefix cache (null in Legacy mode).
+    std::unique_ptr<HybridPrefixCache> hybrid_;
+    std::array<HybridLaneState, kMaximumConcurrency> hybrid_lanes_;
+    runtime::prefix_cache::CacheCostModel hybrid_cost_;
+    double hybrid_coalesce_wait_seconds_ = 0.0;
+    std::filesystem::path hybrid_file_;
+    std::string hybrid_fingerprint_;
+    std::optional<HybridCachePersistence> hybrid_shutdown_save_;
+
+    void create_hybrid_prefix_cache(const StartupObserver& observer);
+    // The per-layer events the lane's first prefill pass waits on, consumed by this call.
+    [[nodiscard]] std::span<const cudaEvent_t> hybrid_take_restore_layers(std::uint32_t lane);
+    // True when a sibling lane still prefilling a prompt that shares more with this one than the
+    // cache offers will publish a snapshot where they diverge soon enough to wait for. Plans that
+    // snapshot as an exact tap of the sibling when none is planned near the divergence.
+    [[nodiscard]] bool hybrid_await_sibling(const PreparedPromptData& prompt, std::uint32_t reuse,
+                                            std::uint32_t destination);
+    // Writes the Host tier to the attached file once every Host write has landed. Called by the
+    // shutdown cleanup after the lanes wrote their blocks through.
+    void save_hybrid_cache_for_shutdown() noexcept;
+    [[nodiscard]] MaterializationResult
+    progress_hybrid_materialization(runtime::CancellationFlagView cancellation);
+    // Pins the quoted path and snapshot, reserves every Device page the admission needs and
+    // submits the Host restores its source requires. Returns false, with nothing staged left
+    // behind by the caller's abort, when the quote went stale or the pools cannot supply it.
+    [[nodiscard]] bool hybrid_stage(HybridMaterializationTransaction& transaction,
+                                    const PreparedPromptData& prompt);
+    // Builds the lane from the staged, Device-resident source.
+    [[nodiscard]] StartResult hybrid_activate(HybridMaterializationTransaction& transaction);
+    void hybrid_abort_materialization(HybridMaterializationTransaction& transaction) noexcept;
+    void hybrid_prompt_keys(const PreparedPromptData& prompt, std::vector<std::uint64_t>& hashes,
+                            std::vector<std::uint64_t>& extras) const;
+    [[nodiscard]] bool hybrid_make_room(std::uint32_t text_pages, std::uint32_t backend_pages);
+    // The backend KV frontier restored with a snapshot at `frontier` (MTP trails by one token).
+    [[nodiscard]] std::uint32_t hybrid_backend_frontier(std::uint32_t frontier) const noexcept;
+    // Inserts every newly committed full block of the lane's sequence into the tree, then
+    // publishes the pending taps those blocks complete.
+    void hybrid_publish_blocks(SequenceState& sequence);
+    // Snapshots the lane's committed state at the prefill frontier `frontier`.
+    void hybrid_capture_tap(SequenceState& sequence, std::uint32_t frontier);
+    // Realizes the planned taps a completed prefill chunk reached.
+    void hybrid_after_prefill_chunk(SequenceState& sequence, std::uint32_t cursor,
+                                    std::uint32_t prompt_tokens);
+    // Publishes pending taps whose blocks are committed; a finishing lane hands its own last
+    // pages to the remaining ones or drops them.
+    void hybrid_publish_pending(SequenceState& sequence, bool finishing);
+    // Copies a tail bundle into cache-owned pages; absent when no Device page can be freed.
+    [[nodiscard]] std::optional<std::uint32_t> hybrid_copy_tail(const HybridBlockPages& source,
+                                                                std::uint32_t columns);
+    // Terminal publication: committed blocks and, when useful, an endpoint snapshot. Then the
+    // lane's sequence is released. Returns false when the lane could not be released strictly.
+    [[nodiscard]] bool hybrid_finish_lane(SequenceState& sequence, RequestControl& request,
+                                          std::uint32_t lane, bool endpoint) noexcept;
+    // Drops the lane's index pins. Safe on any lane state.
+    void hybrid_release_lane(std::uint32_t lane) noexcept;
 
     [[nodiscard]] std::optional<AdmissionCandidate>
     inspect_lane(std::uint32_t lane, const PreparedPromptData& prompt, const RequestBasePlan& base,

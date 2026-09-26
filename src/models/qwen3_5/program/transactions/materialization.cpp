@@ -2303,6 +2303,8 @@ ProgramImpl::progress_context_transaction(runtime::CancellationFlagView cancella
                 throw std::logic_error("Program has no progressable context transaction");
             } else if constexpr (std::is_same_v<Transaction, MaterializationTransaction>) {
                 return terminal_or_pending(progress_materialization_transaction(cancellation));
+            } else if constexpr (std::is_same_v<Transaction, HybridMaterializationTransaction>) {
+                return terminal_or_pending(progress_hybrid_materialization(cancellation));
             } else {
                 return terminal_or_pending(progress_active_capture_transaction(cancellation));
             }
@@ -2340,6 +2342,22 @@ bool ProgramImpl::vision_pending(SequenceHandle sequence) const noexcept {
         // A failed completion query surfaces when the prefill unit synchronizes the item.
         return false;
     }
+}
+
+bool ProgramImpl::wait_context_transfer() noexcept {
+    bool submitted = false;
+    if (const auto* transaction = std::get_if<MaterializationTransaction>(&context_transaction_)) {
+        submitted = transaction->transfer_submitted;
+    } else if (const auto* capture = std::get_if<ActiveCaptureTransaction>(&context_transaction_)) {
+        submitted = capture->transfer_submitted;
+    }
+    // A Legacy transaction may stay in progress after its copy landed; only a wait that was
+    // actually needed resumes the worker at once, so such a transaction never spins it.
+    try {
+        if (!submitted || context_completion_.ready()) { return false; }
+        context_completion_.synchronize();
+    } catch (...) {}
+    return true;
 }
 
 

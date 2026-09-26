@@ -15,12 +15,18 @@
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <typeinfo>
 #include <utility>
+
+#ifdef _WIN32
+#    include <windows.h>
+#endif
 
 namespace {
 
@@ -50,6 +56,61 @@ void handle_signal(int) {
     std::abort();
 }
 
+#ifdef _WIN32
+// Ctrl+C reaches handle_signal through the C runtime; the other console events end the process
+// without it. Ctrl+Break stops the server like Ctrl+C. Closing the console window terminates the
+// process as soon as this handler returns, so it stops the server and then blocks: main unwinds,
+// the Engine saves the prefix cache (--prefix-cache-file), and the process exits normally.
+// Windows terminates it anyway about 5 seconds after the close; an unfinished save leaves the
+// previous cache file in place.
+BOOL WINAPI handle_console_event(DWORD event) {
+    switch (event) {
+    case CTRL_BREAK_EVENT:
+        handle_signal(SIGINT);
+        return TRUE;
+    case CTRL_CLOSE_EVENT:
+        handle_signal(SIGINT);
+        Sleep(INFINITE);
+        return TRUE;
+    default:
+        return FALSE;
+    }
+}
+#endif
+
+// Identity of this exact binary for the persisted prefix cache: the build id alone repeats for
+// every uncommitted build, so the executable's size and modification time are included and any
+// rebuild invalidates a saved cache whose bytes it may compute differently.
+std::string binary_identity(const char* argv0) {
+    std::string out;
+#ifdef NINFER_BUILD_ID
+    out = NINFER_BUILD_ID;
+#endif
+    std::error_code error;
+#ifdef _WIN32
+    // argv[0] is whatever the shell typed, which for a PATH launch is not a path to this file.
+    (void)argv0;
+    std::wstring module(MAX_PATH, L'\0');
+    DWORD length = 0;
+    while ((length = GetModuleFileNameW(nullptr, module.data(),
+                                        static_cast<DWORD>(module.size()))) == module.size()) {
+        module.resize(module.size() * 2);
+    }
+    module.resize(length);
+    const std::filesystem::path self(module);
+#else
+    std::filesystem::path self = std::filesystem::read_symlink("/proc/self/exe", error);
+    if (error) { self = std::filesystem::absolute(argv0, error); }
+#endif
+    const auto size = std::filesystem::file_size(self, error);
+    if (!error) { out += ";size=" + std::to_string(size); }
+    const auto time = std::filesystem::last_write_time(self, error);
+    if (!error) {
+        out += ";mtime=" + std::to_string(static_cast<long long>(time.time_since_epoch().count()));
+    }
+    return out;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -71,6 +132,9 @@ int main(int argc, char** argv) {
     }
     // --log-colours on colours the statistics tokens as well as the levels; off keeps the log plain.
     ninfer::serve::set_operational_log_colours(options.log_colours.value_or(false));
+    if (!options.context_cache.hybrid.persistent_file.empty()) {
+        options.context_cache.hybrid.persistent_identity = binary_identity(argv[0]);
+    }
 
     ninfer::product::LoggingOptions logging_options;
     logging_options.logger_name  = "ninfer-serve";
@@ -128,6 +192,9 @@ int main(int argc, char** argv) {
         // never runs. GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT) is the one graceful stop a parent
         // can request, and the CRT raises it as SIGBREAK.
         std::signal(SIGBREAK, handle_signal);
+#endif
+#ifdef _WIN32
+        SetConsoleCtrlHandler(handle_console_event, TRUE);
 #endif
 
         serving = true;

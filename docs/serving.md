@@ -1138,7 +1138,7 @@ The table lists executable defaults. The startup example selects a long-context 
 | `--max-context N` | logical context ceiling of each sequence | `8192` |
 | `--rope-yarn` | past the model's native window, YaRN at factor `--max-context` / native instead of plain RoPE for the text and MTP layers | off |
 | `--rope-yarn-factor F` | YaRN at a fixed factor in `[1,4]` for every position whatever `--max-context` is, as Qwen documents one factor per deployment; it grows neither the default context nor the KV pool, and long-context extrapolation is not a quality guarantee | `1` (as `--rope-yarn` decides) |
-| `--kv-capacity N\|auto` | explicit shared Main Text KV capacity, or maximize it from remaining GPU memory; omitted means `--max-context` | `8192` |
+| `--kv-capacity N\|auto` | explicit shared Main Text KV capacity, or maximize it from remaining GPU memory; omitted means `--max-context`, or `auto` with `--use-alt-prefix-caching` | `8192` |
 | `--kv-headroom-mib N` | device memory in MiB that `--kv-capacity auto` leaves free after sizing the KV pool; requires `auto`. `--vram-headroom-mib` is accepted as an alias | `1024` |
 | `--max-concurrency N` | maximum admitted requests; valid range `1..8` | `1` |
 | `--max-pending-requests N` | additional requests allowed to wait for admission | `16` |
@@ -1189,10 +1189,16 @@ The table lists executable defaults. The startup example selects a long-context 
 | `--no-cuda-graph` | disable CUDA Graph decode | graphs on |
 | `--cuda-graph-allowance-mib N` | total CUDA Graph driver-state allowance in MiB, subtracted from the KV sizing budget | computed |
 | `--no-prefix-reuse` | disable compatible-prefix caching | prefix reuse on |
+| `--use-alt-prefix-caching` | select the hybrid prefix cache ([spec](maintainer/hybrid-prefix-cache-spec.md)): content-addressed 64-token KV blocks shared across requests plus sparse state snapshots. It configures itself: `--kv-capacity` defaults to `auto` (free VRAM becomes Device block cache) and `--host-cache-mib` sizes the one pinned Host pool that blocks and snapshots share. The checkpoint-catalog flags are rejected with it: its capacities, `--auto-long-anchors`, `--auto-prefix-grid`, `--context-cache-policy`, `--release-diverged-checkpoints`, `--thorough-admission-search`, `--recency-eviction` and the disk tier, as are pipeline `--devices`. | off |
+| `--device-snapshot-slots N` | hybrid: Device state snapshot slots (`1..64`) | `max-concurrency + 1`; `+ 2` without a Host tier |
+| `--cache-taps-per-request N` | hybrid: new prefill state snapshots per request (`0..64`) | `8`; `2` without a Host tier |
+| `--cache-tap-ladder N` | hybrid: history-snapshot ladder base G; flexible taps at `prompt − G·2^k` | `max(4096, 2 * prefill-chunk)` |
+| `--cache-tap-min-gap N` | hybrid: minimum tokens between ladder snapshots | `max(1024, prefill-chunk)` |
+| `--prefix-cache-file PATH` | hybrid: at startup, restore the Host tier from `PATH` if the file exists; on clean shutdown (Ctrl+C, Ctrl+Break, or closing the console window), save it there (every Host-backed snapshot and the block path it resumes through). Windows ends a closing console's process about 5 s after the close; a save still running then is abandoned and the previous file kept, so stop large caches with Ctrl+C. `PATH` may be relative (resolved against the launch directory) or absolute, e.g. `--prefix-cache-file "e:\NInfer-Deploy-V3\file.cache"`. Its directory must exist, and the flag needs a Host tier (not `--host-cache-mib 0`). A file written for another artifact, KV format, speculative backend, RoPE scaling or `ninfer-serve` binary is ignored and replaced at shutdown. The startup log reports what was restored. Saving writes up to `--host-cache-mib` of data. | off: nothing is saved or restored |
 | `--device-state-slots N` | extra Device checkpoint StateImages beyond the active-lane guarantee | `max-concurrency` |
 | `--host-state-slots N` | pinned Host StateImage capacity | `8` |
 | `--host-kv-mib N` | shared pinned Host Main/Backend KV byte capacity in MiB | `8192` |
-| `--host-cache-mib N` | single pinned Host RAM ceiling for the whole retention tier in MiB; the engine derives the Host StateImage slot count from the checkpoint inventory the capture path creates, spends the remaining state headroom on more long anchors per continuation when `--auto-long-anchors` is on, and gives Host KV the remainder. Replaces `--host-state-slots` and `--host-kv-mib`, which are rejected alongside it. | unset (component flags used) |
+| `--host-cache-mib N` | single pinned Host RAM ceiling for the whole retention tier in MiB. Hybrid mode: the slab pool KV blocks and state snapshots share, split at run time by eviction value; `0` keeps the cache on the Device only, and a nonzero budget below one snapshot is rejected. Default cache: the engine derives the Host StateImage slot count from the checkpoint inventory the capture path creates, spends the remaining state headroom on more long anchors per continuation when `--auto-long-anchors` is on, and gives Host KV the remainder. Replaces `--host-state-slots` and `--host-kv-mib`, which are rejected alongside it. | hybrid `8192`; otherwise unset (component flags used) |
 | `--max-private-continuations N` | private continuation descriptor capacity | `2 * max-concurrency` |
 | `--max-shared-prefixes N` | Engine-wide shared stable-prefix descriptor capacity | `max(max-concurrency, 7)` |
 | `--max-long-anchors-per-continuation N` | private long-anchor limit per continuation; with `--auto-long-anchors`, `--host-cache-mib` raises it within the state inventory it funds and never lowers it | `2`, `4` with `--auto-long-anchors` |
@@ -1368,7 +1374,9 @@ without CUDA Graphs); the startup log warns when the second exceeds the first.
 request-local, and `--ngram-session-mib`), and `ngram_native_sessions`. Its `context_cache` object
 records the resolved capacities and the `rolling_retention`, `release_diverged_checkpoints`,
 `thorough_admission_search`, `recency_eviction`, `kv_lease_growth`, `automatic_long_anchors` and
-`long_anchor_min_spacing_tokens` settings.
+`long_anchor_min_spacing_tokens` settings, the cache `mode` (`legacy` or `hybrid`), the
+`host_cache_budget_bytes`, and under `--use-alt-prefix-caching` a `hybrid` object with the resolved
+snapshot slots, taps per request, tap ladder and minimum gap and whether the Host tier persists.
 
 `request_done.engine_timing` separates FIFO `queue_wait_seconds`, blocking
 `device_wait_exposed_seconds`, and five mutually exclusive Host-active exposure phases under

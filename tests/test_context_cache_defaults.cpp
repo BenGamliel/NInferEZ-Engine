@@ -1,4 +1,5 @@
 #include "models/qwen3_5/program/planning/startup.h"
+#include "models/qwen3_5/program/prefix/hybrid_host_layout.h"
 #include "runtime/engine/model_instance.h"
 
 #include <iostream>
@@ -204,6 +205,94 @@ int main() {
                 cache.host_kv_capacity_bytes == 27296221184ULL,
             "production budget did not resolve to the hand-computed 31 anchors / 139 images / "
             "27,296,221,184 B Host KV split");
+    }
+
+    // Hybrid mode derives every tuning value from the rest of the configuration. With the default
+    // Host tier (8 GiB) at concurrency 2 and a 2048-token chunk: one resident snapshot per lane
+    // plus one staging slot = 3, 8 taps, ladder max(4096, 2 * 2048) = 4096 and minimum gap
+    // max(1024, 2048) = 2048. The Legacy catalogs and Host pools are empty.
+    {
+        EngineOptions options;
+        options.max_concurrency                = 2;
+        options.prefill_chunk                  = 2048;
+        options.context_cache.mode             = ninfer::ContextCacheMode::Hybrid;
+        const EngineOptions normalized         = normalize_engine_options(options);
+        const ninfer::ContextCacheOptions& out = normalized.context_cache;
+        failures +=
+            check(out.host_cache_budget_bytes == ninfer::kDefaultHybridHostCacheBytes &&
+                      out.hybrid.device_snapshot_slots == 3U && out.device_state_slots == 3U &&
+                      out.hybrid.max_new_taps == 8U && out.hybrid.tap_ladder_tokens == 4096U &&
+                      out.hybrid.tap_min_gap_tokens == 2048U && out.host_state_slots == 0 &&
+                      out.host_kv_capacity_bytes == 0 && out.max_private_continuations == 2U &&
+                      out.max_shared_prefixes == 0U && out.max_long_anchors_per_continuation == 0U,
+                  "hybrid defaults did not derive from concurrency, chunk and Host tier");
+    }
+
+    // Without a Host tier Device slots are the only snapshot storage: two spare slots and a
+    // two-tap budget. A large chunk coarsens the ladder: max(4096, 2 * 8192) and max(1024, 8192).
+    {
+        EngineOptions options;
+        options.max_concurrency                       = 8;
+        options.prefill_chunk                         = 8192;
+        options.context_cache.mode                    = ninfer::ContextCacheMode::Hybrid;
+        options.context_cache.host_cache_budget_bytes = 0;
+        const ninfer::ContextCacheOptions out = normalize_engine_options(options).context_cache;
+        failures +=
+            check(out.host_cache_budget_bytes == 0U && out.hybrid.device_snapshot_slots == 10U &&
+                      out.hybrid.max_new_taps == 2U && out.hybrid.tap_ladder_tokens == 16384U &&
+                      out.hybrid.tap_min_gap_tokens == 8192U,
+                  "Device-only hybrid defaults are wrong");
+    }
+
+    // Explicit hybrid overrides are kept verbatim.
+    {
+        EngineOptions options;
+        options.max_concurrency                            = 4;
+        options.context_cache.mode                         = ninfer::ContextCacheMode::Hybrid;
+        options.context_cache.hybrid.device_snapshot_slots = 12;
+        options.context_cache.hybrid.max_new_taps          = 3;
+        options.context_cache.hybrid.tap_ladder_tokens     = 8192;
+        options.context_cache.hybrid.tap_min_gap_tokens    = 512;
+        const ninfer::ContextCacheOptions out = normalize_engine_options(options).context_cache;
+        failures +=
+            check(out.hybrid.device_snapshot_slots == 12U && out.device_state_slots == 12U &&
+                      out.hybrid.max_new_taps == 3U && out.hybrid.tap_ladder_tokens == 8192U &&
+                      out.hybrid.tap_min_gap_tokens == 512U,
+                  "explicit hybrid overrides were not preserved");
+    }
+
+    // Hybrid mode rejects Legacy capacities and out-of-range tuning.
+    for (int variant = 0; variant < 4; ++variant) {
+        EngineOptions options;
+        options.context_cache.mode = ninfer::ContextCacheMode::Hybrid;
+        if (variant == 0) { options.context_cache.device_state_slots = 2; }
+        if (variant == 1) { options.context_cache.max_private_continuations = 4; }
+        if (variant == 2) { options.context_cache.hybrid.device_snapshot_slots = 65; }
+        if (variant == 3) { options.context_cache.hybrid.tap_min_gap_tokens = 16; }
+        bool rejected = false;
+        try {
+            (void)normalize_engine_options(options);
+        } catch (const std::invalid_argument&) { rejected = true; }
+        failures += check(rejected, "hybrid normalization accepted an invalid capacity");
+    }
+
+    // The hybrid Host budget buys whole slabs; it must hold one snapshot (image slabs + tail slab)
+    // plus one block. A 2 MiB slab and a 7-slab image need 9 slabs = 18 MiB; 0 disables the tier.
+    {
+        ninfer::models::qwen3_5::detail::HybridHostLayout layout;
+        layout.slab_bytes  = 2ULL << 20;
+        layout.image_slabs = 7;
+        using ninfer::models::qwen3_5::detail::hybrid_host_slabs;
+        failures += check(hybrid_host_slabs(layout, 0) == 0, "a zero Host budget must disable");
+        failures += check(hybrid_host_slabs(layout, 18ULL << 20) == 9U,
+                          "the minimum Host budget did not buy exactly one snapshot and a block");
+        failures += check(hybrid_host_slabs(layout, (21ULL << 20) - 1U) == 10U,
+                          "a Host budget must buy whole slabs");
+        bool rejected = false;
+        try {
+            (void)hybrid_host_slabs(layout, (18ULL << 20) - 1U);
+        } catch (const std::invalid_argument&) { rejected = true; }
+        failures += check(rejected, "a Host budget below one snapshot was accepted");
     }
 
     if (failures == 0) { std::cout << "ok\n"; }

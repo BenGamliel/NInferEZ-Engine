@@ -39,7 +39,10 @@
 
 namespace ninfer::runtime {
 
-template <class Instance>
+// `Manager` selects the prefix-cache implementation: ResourceManager (Legacy) or
+// HybridResourceManager (docs/maintainer/hybrid-prefix-cache-spec.md). Both expose the same
+// admission, capture and terminal-settlement surface to this core.
+template <class Instance, class Manager = ResourceManager<typename Instance::ModelContract>>
 class EngineCore {
 
 public:
@@ -62,9 +65,23 @@ public:
     using ActiveAdmissionSet = typename Scheduling::ActiveAdmissionSet;
     using ExecutionAction    = typename Scheduling::ExecutionAction;
     using AdmissionGrant     = typename Scheduling::AdmissionGrant;
-    using ResourceManagement = ResourceManager<ModelContract>;
+    using ResourceManagement = Manager;
     using ResourceInspection = typename ResourceManagement::Inspection;
     using Clock              = std::chrono::steady_clock;
+
+    [[nodiscard]] static Manager make_resource_manager(const EngineOptions& options,
+                                                       ContextMachineCostModel context_cost) {
+        if constexpr (std::is_same_v<Manager, ResourceManager<ModelContract>>) {
+            return Manager(
+                options.max_concurrency, options.context_cache.max_private_continuations.value(),
+                options.context_cache.max_shared_prefixes.value(), options.context_cache.enabled,
+                options.context_cache.max_long_anchors_per_continuation.value_or(0),
+                std::move(context_cost));
+        } else {
+            (void)context_cost;
+            return Manager(options.max_concurrency);
+        }
+    }
 
     EngineCore(Instance& instance, DeviceContext& device, const EngineOptions& options,
                ContextMachineCostModel context_cost)
@@ -76,11 +93,7 @@ public:
           max_outstanding_(static_cast<std::size_t>(options.max_concurrency) +
                            options.max_pending_requests),
           pending_timeout_(std::chrono::milliseconds(options.pending_timeout_ms)),
-          resources_(max_concurrency_, options.context_cache.max_private_continuations.value(),
-                     options.context_cache.max_shared_prefixes.value(),
-                     options.context_cache.enabled,
-                     options.context_cache.max_long_anchors_per_continuation.value_or(0),
-                     std::move(context_cost)) {
+          resources_(make_resource_manager(options, std::move(context_cost))) {
         if (max_concurrency_ == 0 || max_concurrency_ > kMaximumConcurrency ||
             options.max_pending_requests == 0 || pending_timeout_.count() <= 0) {
             throw std::invalid_argument("Engine core bounds are invalid");
@@ -90,11 +103,13 @@ public:
             !options.context_cache.max_shared_prefixes) {
             throw std::logic_error("target admission capacity does not match the Engine");
         }
-        if (options.context_cache.rolling_retention) { resources_.enable_rolling_retention(); }
-        if (options.context_cache.release_diverged_checkpoints) {
-            resources_.enable_diverged_checkpoint_release();
+        if constexpr (std::is_same_v<Manager, ResourceManager<ModelContract>>) {
+            if (options.context_cache.rolling_retention) { resources_.enable_rolling_retention(); }
+            if (options.context_cache.release_diverged_checkpoints) {
+                resources_.enable_diverged_checkpoint_release();
+            }
+            if (options.context_cache.recency_eviction) { resources_.enable_recency_eviction(); }
         }
-        if (options.context_cache.recency_eviction) { resources_.enable_recency_eviction(); }
         if (options.speculative.ngram_archive_bytes != 0) {
             ngram_archive_ = std::make_unique<NgramArchive>(typename NgramArchive::Limits{
                 .session_bytes = options.speculative.ngram_session_bytes,
@@ -2167,11 +2182,20 @@ private:
         try { publish_runtime_stats(); } catch (...) {}
     }
 
+    enum class ProgramCleanup : std::uint8_t {
+        Failure,
+        // The orderly stop: the Program may persist what it caches before dropping it.
+        Shutdown,
+    };
+
     // Drops every Program owner and the Engine's catalog of them. Reports when the Program had to
     // rebuild its context stores because an owner could not be released cleanly.
-    void cleanup_program_locked() noexcept {
+    void cleanup_program_locked(ProgramCleanup cleanup = ProgramCleanup::Failure) noexcept {
         decltype(instance_.program->fail_all_cleanup()) leaked;
-        try { leaked = instance_.program->fail_all_cleanup(); } catch (...) {}
+        try {
+            leaked = cleanup == ProgramCleanup::Shutdown ? instance_.program->shutdown_cleanup()
+                                                         : instance_.program->fail_all_cleanup();
+        } catch (...) {}
         try { resources_.clear_after_program_cleanup(); } catch (...) {}
         if (leaked) {
             publish_diagnostic(diagnostics_, DiagnosticLevel::Warning,
@@ -2186,7 +2210,8 @@ private:
 
     // The worker holds execution_mutex_ across the failing operation and this cleanup, so no
     // Program introspection can observe a partially cleared physical state.
-    void fail_all_locked(std::exception_ptr error) noexcept {
+    void fail_all_locked(std::exception_ptr error,
+                         ProgramCleanup cleanup = ProgramCleanup::Failure) noexcept {
         std::deque<std::shared_ptr<Request>> pending;
         {
             std::lock_guard lock(queue_mutex_);
@@ -2197,7 +2222,7 @@ private:
         const std::shared_ptr<Request> materializing_request =
             materializing_ ? materializing_->request : nullptr;
         try { materializing_.reset(); } catch (...) {}
-        cleanup_program_locked();
+        cleanup_program_locked(cleanup);
         for (std::uint32_t lane = 0; lane < max_concurrency_; ++lane) {
             if (slots_[lane] != nullptr) {
                 auto slot_request = std::move(slots_[lane]);
@@ -2248,7 +2273,7 @@ private:
                     const auto error = std::make_exception_ptr(RequestError(
                         RequestErrorKind::Unavailable, "inference engine is shutting down"));
                     std::scoped_lock execution_lock(execution_mutex_);
-                    fail_all_locked(error);
+                    fail_all_locked(error, ProgramCleanup::Shutdown);
                     return;
                 }
             }
@@ -2328,6 +2353,11 @@ private:
                 // admission-only iterations (where admit_planned_request caught
                 // an OOM internally) did not complete a real work unit.  Only
                 // successful control/prefill/decode above clears the streak.
+                //
+                // With no unit to run, a context transfer in flight is what the next boundary
+                // waits for. Waiting on it directly resumes admission when the copy lands; the
+                // timed wait below lasts a whole timer tick (about 15.6 ms on Windows).
+                if (instance_.program->wait_context_transfer()) { continue; }
             } catch (const std::bad_alloc& oom) {
                 {
                     char buf[256];

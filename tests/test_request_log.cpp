@@ -220,7 +220,9 @@ int main() {
             server.at("engine").at("context_cache").at("host_state_slots") == 3 &&
             server.at("engine").at("context_cache").at("host_kv_capacity_bytes") == (64ULL << 20) &&
             server.at("engine").at("context_cache").at("max_private_continuations") == 4 &&
-            server.at("engine").at("context_cache").at("max_shared_prefixes") == 2,
+            server.at("engine").at("context_cache").at("max_shared_prefixes") == 2 &&
+            server.at("engine").at("context_cache").at("mode") == "legacy" &&
+            server.at("engine").at("context_cache").at("hybrid").is_null(),
         "resolved context-cache configuration missing");
     failures += check(server.at("server").at("default_preserve_thinking") == true,
                       "server preserve-thinking default missing");

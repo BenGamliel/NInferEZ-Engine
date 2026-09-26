@@ -1171,6 +1171,9 @@ void TextContext::run_stage_layers(std::size_t stage, Tensor& x, Phase ph, Tap& 
                  : (prefill ? nvtx::Name::PrefillLayerGdn : nvtx::Name::VerifyLayerGdn),
             full ? nvtx::Category::Attention : nvtx::Category::Gdn, layer);
         try {
+            if (layer < layer_ready_.size()) {
+                CUDA_CHECK(cudaStreamWaitEvent(ctx_.stream, layer_ready_[layer], 0));
+            }
             {
                 nvtx::ScopedRange mixer_range(
                     full ? (prefill ? nvtx::Name::PrefillAttention : nvtx::Name::VerifyAttention)
@@ -1204,6 +1207,8 @@ void TextContext::run_stage_layers(std::size_t stage, Tensor& x, Phase ph, Tap& 
                                      " columns=" + std::to_string(x.ne[1]) + ": " + error.what());
         }
     }
+    // Later passes are stream-ordered behind this one.
+    layer_ready_ = {};
 }
 
 namespace {

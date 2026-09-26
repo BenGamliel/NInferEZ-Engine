@@ -77,6 +77,7 @@ PrefillChunkResult prefill_text_chunk(PrefillContext& state, std::span<const Tok
     card.set_rewrite_checkpoint_hidden_output(state.rewrite_checkpoint_hidden);
     card.set_prefill_split_frontier(split_frontier ? static_cast<std::int64_t>(*split_frontier)
                                                    : -1);
+    card.set_layer_ready(state.layer_ready);
     const std::span<const int> prompt(ids.data(), ids.size());
     if (state.dflash != nullptr) {
         DFlashFeatureSink sink = make_dflash_prefill_sink(state);
@@ -103,6 +104,7 @@ PrefillChunkResult prefill_multimodal_chunk(PrefillContext& state, const Prepare
     card.set_rewrite_checkpoint_hidden_output(state.rewrite_checkpoint_hidden);
     card.set_prefill_split_frontier(split_frontier ? static_cast<std::int64_t>(*split_frontier)
                                                    : -1);
+    card.set_layer_ready(state.layer_ready);
     if (state.dflash != nullptr) {
         DFlashFeatureSink sink = make_dflash_prefill_sink(state);
         return card.prefill_chunk(prompt, state.text_kv_base, nominal_length, vision,
@@ -1055,9 +1057,29 @@ runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
         // binds its own rows before any Prefill or MTP-bridge work.
         bind_sequence_kv(sequence);
         StateImageSelectors selectors = state_selectors(sequence);
+        // Hybrid prefix cache taps (docs/maintainer/hybrid-prefix-cache-spec.md §7.1): an exact tap
+        // splits the chunk at its frontier; any chunk boundary may realize a flexible tap, so the
+        // continuation hidden is kept while the lane has taps left.
+        const HybridLaneState* hybrid_lane =
+            hybrid_ && sequence.lane < max_concurrency ? &hybrid_lanes_[sequence.lane] : nullptr;
+        const auto hybrid_taps_left = [&]() {
+            return hybrid_lane != nullptr && hybrid_lane->active && hybrid_lane->publish &&
+                   hybrid_lane->next_tap < hybrid_lane->taps.size();
+        };
+        const auto next_hybrid_split = [&]() -> std::optional<std::uint32_t> {
+            if (!hybrid_taps_left()) { return std::nullopt; }
+            for (std::size_t tap = hybrid_lane->next_tap; tap < hybrid_lane->taps.size(); ++tap) {
+                const runtime::prefix_cache::PlannedTap& planned = hybrid_lane->taps[tap];
+                if (planned.placement == runtime::prefix_cache::TapPlacement::Exact &&
+                    planned.position > staged.cursor) {
+                    return planned.position;
+                }
+            }
+            return std::nullopt;
+        };
         Tensor rewrite_capture_hidden;
         Tensor* rewrite_capture_hidden_ptr = nullptr;
-        if (staged.next_capture < staged.capture_groups.size()) {
+        if (staged.next_capture < staged.capture_groups.size() || hybrid_taps_left()) {
             rewrite_capture_hidden = state_images->continuation_hidden_slot(selectors.destination);
             rewrite_capture_hidden_ptr = &rewrite_capture_hidden;
         }
@@ -1086,6 +1108,8 @@ runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
             }
             schedule_state.first_token_logits = first_token_logits_host->data();
         }
+        // The first pass after a Host restore waits for each layer's copies (hybrid spec §6.5).
+        schedule_state.layer_ready = hybrid_take_restore_layers(sequence.lane);
 
         if (staged.mtp_bridge == MtpBridgeMode::BeforeSuffix) {
             if (staged.cursor != staged.base || staged.base == 0 ||
@@ -1134,7 +1158,8 @@ runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
                 selectors                             = state_selectors(sequence);
                 schedule_state.state_source_slot      = selectors.source;
                 schedule_state.state_destination_slot = selectors.destination;
-                if (staged.next_capture < staged.capture_groups.size()) {
+                const std::optional<std::uint32_t> hybrid_split = next_hybrid_split();
+                if (staged.next_capture < staged.capture_groups.size() || hybrid_taps_left()) {
                     rewrite_capture_hidden =
                         state_images->continuation_hidden_slot(selectors.destination);
                     schedule_state.rewrite_checkpoint_hidden = &rewrite_capture_hidden;
@@ -1149,12 +1174,22 @@ runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
                               staged.capture_groups[staged.next_capture].frontier)
                         : std::nullopt;
                 std::optional<std::uint32_t> split_frontier = capture_frontier;
-                const auto rewrite_split                    = std::upper_bound(
-                    staged.prompt.identity.rewrite_execution_frontiers.begin(),
-                    staged.prompt.identity.rewrite_execution_frontiers.end(), staged.cursor);
-                if (rewrite_split != staged.prompt.identity.rewrite_execution_frontiers.end() &&
+                // Rewrite execution frontiers split prefill for the Legacy catalog's rewrite
+                // checkpoints and execution provenance. The hybrid cache captures nothing there:
+                // it keys resume points by content and splits only at its own exact taps, so
+                // each split would be a whole extra pass over the model for nothing.
+                const auto& rewrite_frontiers = staged.prompt.identity.rewrite_execution_frontiers;
+                const auto rewrite_split =
+                    hybrid_lane != nullptr && hybrid_lane->active
+                        ? rewrite_frontiers.end()
+                        : std::upper_bound(rewrite_frontiers.begin(), rewrite_frontiers.end(),
+                                           staged.cursor);
+                if (rewrite_split != rewrite_frontiers.end() &&
                     (!split_frontier || *rewrite_split < *split_frontier)) {
                     split_frontier = *rewrite_split;
+                }
+                if (hybrid_split && (!split_frontier || *hybrid_split < *split_frontier)) {
+                    split_frontier = *hybrid_split;
                 }
                 execution::PrefillChunkResult result;
                 timing.pause();
@@ -1176,6 +1211,7 @@ runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
                 }
                 timing.include(result.timing);
                 timing.resume_post();
+                schedule_state.layer_ready = {};
                 if (result.processed_tokens == 0 || result.processed_tokens > remaining) {
                     throw std::logic_error("ordinary prefill chunk made invalid progress");
                 }
@@ -1194,6 +1230,9 @@ runtime::PrefillStepResult ProgramImpl::advance_prefill(SequenceState& sequence,
                 // Prompt transitions are canonical immediately. If this was the first write after
                 // an immutable source, close the Fork before potentially freezing a new rewrite.
                 settle_state_fork(sequence);
+                if (hybrid_lane != nullptr && !result.finalized) {
+                    hybrid_after_prefill_chunk(sequence, staged.cursor, staged.prompt_tokens);
+                }
                 const bool reached_capture = capture_frontier && staged.cursor == *capture_frontier;
                 if (reached_capture) {
                     if (result.finalized) {

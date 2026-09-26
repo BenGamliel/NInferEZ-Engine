@@ -29,6 +29,7 @@ struct RuntimeTypes {
     using AssessedPressureTarget     = qwen3_5::AssessedPressureTarget;
     using CapturePressurePlan        = qwen3_5::CapturePressurePlan;
     using MaterializationResult      = qwen3_5::MaterializationResult;
+    using HybridAdmissionQuote       = qwen3_5::HybridAdmissionQuote;
     using ContextTransactionProgress = qwen3_5::ContextTransactionProgress;
     using CaptureAssessment          = qwen3_5::CaptureAssessment;
     using ActiveCaptureResult        = qwen3_5::ActiveCaptureResult;

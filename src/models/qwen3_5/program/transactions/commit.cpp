@@ -590,6 +590,17 @@ FinishResult ProgramImpl::finish(SequenceHandle sequence) noexcept {
     SequenceState& state                   = active_sequence(lane);
     const std::uint32_t continuation_index = active_continuations[lane];
     if (request.lifecycle != Lifecycle::Finishable) { return out; }
+    if (hybrid_) {
+        // Hybrid mode retains context in the prefix index, never as a catalogued continuation.
+        out.timings     = request.timings;
+        out.speculative = std::move(request.speculative_stats);
+        if (!hybrid_finish_lane(state, request, lane, true)) { return out; }
+        out.disposition = runtime::FinishDisposition::Released;
+        invalidate_lane(lane);
+        advance_resource_revision();
+        out.status = runtime::ConsumeStatus::Consumed;
+        return out;
+    }
     if (!request.publish_continuation) {
         if (!clear_lane_strict(state, request)) { return out; }
         out.disposition = runtime::FinishDisposition::Released;
@@ -755,6 +766,21 @@ AbortResult ProgramImpl::abort(SequenceHandle sequence) noexcept {
     }
     SequenceState& state = active_sequence(lane);
     const std::uint32_t continuation_index = active_continuations[lane];
+    if (hybrid_) {
+        // The committed state is publishable as an endpoint when no model unit is in flight.
+        out.timings     = request.timings;
+        out.speculative = std::move(request.speculative_stats);
+        const bool consistent =
+            (request.lifecycle == Lifecycle::Active || request.lifecycle == Lifecycle::Finishable ||
+             (request.lifecycle == Lifecycle::Prefilling && request.prefill &&
+              state.text_kv_valid == request.prefill->cursor)) &&
+            !state.state.fork_pending;
+        if (!hybrid_finish_lane(state, request, lane, consistent)) { return out; }
+        invalidate_lane(lane);
+        advance_resource_revision();
+        out.status = runtime::ConsumeStatus::Consumed;
+        return out;
+    }
     if (salvage_continuation(state, request, lane, continuation_index, out)) {
         out.status = runtime::ConsumeStatus::Consumed;
         return out;
@@ -852,7 +878,8 @@ ReleaseResult ProgramImpl::release_shared_prefix(SharedPrefixHandle&& handle) no
     return out;
 }
 
-std::optional<qwen3_5::PhysicalUsageSnapshot> ProgramImpl::fail_all_cleanup() noexcept {
+std::optional<qwen3_5::PhysicalUsageSnapshot>
+ProgramImpl::fail_all_cleanup(ProgramCleanup cleanup) noexcept {
     pending_transaction_.reset();
     if (auto* transaction = std::get_if<ActiveCaptureTransaction>(&context_transaction_)) {
         if (transaction->transfer_submitted) { synchronize_transfer_streams(); }
@@ -862,12 +889,22 @@ std::optional<qwen3_5::PhysicalUsageSnapshot> ProgramImpl::fail_all_cleanup() no
         if (transaction->transfer_submitted) { synchronize_transfer_streams(); }
         release_materialization_staging(*transaction);
     }
+    if (auto* transaction = std::get_if<HybridMaterializationTransaction>(&context_transaction_)) {
+        hybrid_abort_materialization(*transaction);
+    }
     context_transaction_.emplace<std::monostate>();
     for (std::uint32_t lane = 0; lane < max_concurrency; ++lane) {
         if (active_continuations[lane] < continuation_capacity) {
             clear_lane_best_effort(active_sequence(lane), requests[lane]);
         }
         invalidate_lane(lane);
+    }
+    if (hybrid_) {
+        if (cleanup == ProgramCleanup::Shutdown) { save_hybrid_cache_for_shutdown(); }
+        if (device.transfer_stream != nullptr) {
+            (void)cudaStreamSynchronize(device.transfer_stream);
+        }
+        hybrid_->clear();
     }
     for (std::uint32_t index = 0; index < continuation_capacity; ++index) {
         if (continuation_slots[index].role != ContinuationSlotRole::Free) {
@@ -972,6 +1009,15 @@ bool ProgramImpl::rebuild_context_stores() noexcept {
     text_kv_pages        = std::move(text_pages);
     state_store          = std::move(states);
     if (host_state_images) { host_state_images->release_all(); }
+    // The hybrid prefix cache binds the stores by pointer; fail_all_cleanup already released
+    // every reference it held, so it is recreated empty against the new stores.
+    hybrid_lanes_.fill(HybridLaneState{});
+    if (hybrid_) {
+        hybrid_.reset();
+        try {
+            create_hybrid_prefix_cache(StartupObserver{});
+        } catch (...) { return false; }
+    }
     advance_resource_revision();
     return true;
 }

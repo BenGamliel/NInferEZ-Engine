@@ -1,6 +1,7 @@
 #pragma once
 
 #include "runtime/contract/resources.h"
+#include "runtime/prefix_cache/tap_planner.h"
 
 #include "models/qwen3_5/frontend/frontend.h"
 
@@ -139,6 +140,12 @@ struct PrepareStats {
     std::size_t reused_patch_bytes       = 0;
 };
 
+// Prompt boundary facts for hybrid prefix-cache tap placement
+// (docs/maintainer/hybrid-prefix-cache-spec.md §7.1). Frontiers are exact token positions.
+struct PreparedTapHints {
+    std::vector<runtime::prefix_cache::TapHint> hints;
+};
+
 struct PreparedPromptData {
     // Proposal-only sources, never part of target tokens, positions or cache identity.
     std::vector<std::vector<TokenId>> ngram_sources;
@@ -154,6 +161,7 @@ struct PreparedPromptData {
     std::vector<VisionItem> vision_items;
     PromptIdentity identity;
     PreparedContextCache context_cache;
+    PreparedTapHints tap_hints;
     std::shared_ptr<const frontend::ToolCallOutputContract> tool_call_output;
     bool starts_in_reasoning = false;
     PrepareStats prepare;

@@ -42,6 +42,8 @@ inline constexpr std::size_t kDefaultHostKvCapacityBytes = 8ULL << 30;
 inline constexpr std::size_t kMaxSupportedResidualHiddenSize = 5120;
 // BF16: the residual stream's dtype for every shipped target, independent of KV cache storage.
 inline constexpr std::size_t kResidualStreamBytesPerElement = 2;
+// Pinned Host tier of the hybrid prefix cache when --host-cache-mib is not given.
+inline constexpr std::size_t kDefaultHybridHostCacheBytes = 8ULL << 30;
 
 enum class KvCacheStorage : std::uint8_t {
     BFloat16,
@@ -203,17 +205,55 @@ struct DiagnosticObserver {
     std::function<void(const Diagnostic& diagnostic)> callback;
 };
 
+// Prefix-cache implementation selected at Engine construction. Legacy is the owner/checkpoint
+// ResourceManager (docs/maintainer/resource-scheduling-and-context-cache.md). Hybrid is the
+// content-addressed block tree with sparse state snapshots
+// (docs/maintainer/hybrid-prefix-cache-spec.md).
+enum class ContextCacheMode : std::uint8_t {
+    Legacy,
+    Hybrid,
+};
+
+// Hybrid-mode tuning. Every field is optional: Engine construction derives the unset ones from
+// max_concurrency, prefill_chunk and whether a Host tier exists (host_cache_budget_bytes, default
+// kDefaultHybridHostCacheBytes, 0 disables it), and Engine::options() reports the effective
+// values. Legacy-only fields of ContextCacheOptions are rejected in Hybrid mode.
+struct HybridPrefixCacheOptions {
+    // Device StateImage slots holding inactive snapshots (and tap/endpoint staging). Total Device
+    // StateImage capacity is max_concurrency + device_snapshot_slots. Default: one per request
+    // lane plus one staging slot with a Host tier, plus two without one (Device slots are then
+    // the only snapshot storage).
+    std::optional<std::uint32_t> device_snapshot_slots;
+    // New prefill state snapshots one request may create. Default 8 with a Host tier, 2 without.
+    std::optional<std::uint32_t> max_new_taps;
+    // Geometric ladder base G: ladder taps target prompt_tokens - G * 2^k. Default
+    // max(4096, 2 * prefill_chunk): ladder taps land on prefill chunk boundaries.
+    std::optional<std::uint32_t> tap_ladder_tokens;
+    // Ladder taps closer than this to another snapshot on the same path are skipped. Default
+    // max(1024, prefill_chunk).
+    std::optional<std::uint32_t> tap_min_gap_tokens;
+    // Opt-in persistence of the Host tier: saved to this file when the Engine shuts down cleanly
+    // and restored from it at startup, but only when it was written for the same artifact, KV and
+    // state formats and `persistent_identity` (the product binary's build). Empty disables it.
+    std::filesystem::path persistent_file;
+    std::string persistent_identity;
+};
+
 struct ContextCacheOptions {
     // Engine resolves every optional once at construction. With C=max_concurrency, the enabled
     // defaults are H=C, R=8, Host KV=8 GiB, P=2C, S=max(C,7) and L=2 (4 with automatic anchors);
     // Engine::options() returns those effective values.
     bool enabled = true;
+    ContextCacheMode mode = ContextCacheMode::Legacy;
+    HybridPrefixCacheOptions hybrid;
     // Extra Device checkpoint StateImage slots H. Total Device StateImage capacity is C + H.
     std::optional<std::uint32_t> device_state_slots;
     // Host StateImages and Host KV bytes are independently configured pinned-memory capacities.
     std::uint32_t host_state_slots     = kDefaultHostStateSlots;
     std::size_t host_kv_capacity_bytes = kDefaultHostKvCapacityBytes;
-    // Single host RAM ceiling for the whole retention tier. When engaged it is authoritative:
+    // Single host RAM ceiling for the whole retention tier. In Hybrid mode it is the pinned Host
+    // slab pool that KV blocks and state snapshots share (default kDefaultHybridHostCacheBytes, 0
+    // disables the Host tier). In Legacy mode, when engaged it is authoritative:
     // the plan sizes the Host state pool from the checkpoint inventory the capture path creates
     // (2 + anchors per private owner plus one per shared entry), spends the remaining state
     // headroom under the half-budget cap on extra long anchors per owner, gives Host KV the
@@ -1107,6 +1147,14 @@ struct MaterializationDiagnostics {
     MaterializationSearchPhase search_stop_phase = MaterializationSearchPhase::None;
     bool search_boundary_limited                 = false;
 
+    // Hybrid prefix cache admission. `cached_prefix_tokens` is the longest prompt prefix held as
+    // cached KV blocks whether or not it was reusable: reuse also needs a state snapshot inside
+    // it, so a gap to the reused token count is prefix lost to snapshot placement.
+    // `restored_host_bytes` is what the admission copied back from the Host tier; the copies
+    // overlap the request's first prefill pass, so their time is part of its prefill.
+    std::uint32_t cached_prefix_tokens = 0;
+    std::uint64_t restored_host_bytes  = 0;
+
     [[nodiscard]] friend constexpr bool
     operator==(const MaterializationDiagnostics&,
                const MaterializationDiagnostics&) noexcept = default;
@@ -1340,6 +1388,33 @@ struct RuntimeStats {
     std::uint32_t shared_active_references             = 0;
     std::uint64_t historical_fork_hits                 = 0;
     double actual_context_transfer_seconds             = 0.0;
+
+    // Hybrid prefix cache (ContextCacheMode::Hybrid); zero in Legacy mode. Block and snapshot
+    // gauges are absolute; the rest are cumulative event counters.
+    std::uint32_t hybrid_cached_blocks           = 0; // Device-resident tree blocks
+    std::uint32_t hybrid_evictable_blocks        = 0;
+    std::uint32_t hybrid_tree_blocks             = 0; // Device or Host
+    std::uint32_t hybrid_snapshots               = 0;
+    std::uint64_t hybrid_host_capacity_bytes     = 0;
+    std::uint64_t hybrid_host_used_bytes         = 0;
+    std::uint64_t hybrid_snapshot_hits           = 0;
+    std::uint64_t hybrid_reused_tokens           = 0;
+    std::uint64_t hybrid_blocks_inserted         = 0;
+    std::uint64_t hybrid_blocks_reattached       = 0;
+    std::uint64_t hybrid_blocks_duplicate        = 0;
+    std::uint64_t hybrid_taps_created            = 0;
+    std::uint64_t hybrid_taps_skipped            = 0;
+    std::uint64_t hybrid_endpoints_created       = 0;
+    std::uint64_t hybrid_host_image_writes       = 0;
+    std::uint64_t hybrid_host_block_writes       = 0;
+    std::uint64_t hybrid_host_image_restores     = 0;
+    std::uint64_t hybrid_host_block_restores     = 0;
+    std::uint64_t hybrid_host_write_bytes        = 0;
+    std::uint64_t hybrid_host_restore_bytes      = 0;
+    std::uint64_t hybrid_evicted_blocks          = 0;
+    std::uint64_t hybrid_host_snapshot_evictions = 0;
+    std::uint64_t hybrid_host_dead_reclaims      = 0;
+    std::uint64_t hybrid_unbacked_node_losses    = 0;
 };
 
 enum class ContextCostPresetSource : std::uint8_t {
@@ -1401,6 +1476,18 @@ struct LoadSummary {
     std::size_t device_object_count    = 0;
     std::size_t host_object_count      = 0;
     ContextCostSummary context_cost;
+
+    // Hybrid prefix cache restored from its persistent file at startup.
+    struct PrefixCacheRestore {
+        bool attempted = false;
+        bool restored  = false;
+        // Why nothing was restored (no file yet, incompatible file, I/O error).
+        std::string message;
+        std::uint64_t blocks    = 0;
+        std::uint64_t snapshots = 0;
+        std::uint64_t bytes     = 0;
+        double seconds          = 0.0;
+    } prefix_cache;
 };
 
 } // namespace ninfer
