@@ -1,4 +1,5 @@
 #include "ops/linear/q5/q5_dispatch.h"
+#include "ops/linear/common/route_table.h"
 #include "ops/linear/q5/q5_shapes.h"
 #include <array>
 #include <stdexcept>
@@ -8,20 +9,29 @@ namespace {
 struct ShapeEntry {
     std::int32_t n, k;
     Q5Launch (*select)(std::int32_t);
+    // The unified-template table; shapes without one keep the legacy routes everywhere.
+    Q5Launch (*unified)(std::int32_t) = nullptr;
 };
 
 constexpr std::array kShapes{
-    ShapeEntry{1024, 5120, select_q5_n1024_k5120},   ShapeEntry{6144, 5120, select_q5_n6144_k5120},
-    ShapeEntry{7168, 5120, select_q5_n7168_k5120},   ShapeEntry{5120, 6144, select_q5_n5120_k6144},
-    ShapeEntry{5120, 17408, select_q5_n5120_k17408}, ShapeEntry{1152, 1152, select_q5_n1152_k1152},
-    ShapeEntry{1152, 4304, select_q5_n1152_k4304},
+    ShapeEntry{1024, 5120, select_q5_n1024_k5120, select_q5_n1024_k5120_unified},
+    ShapeEntry{6144, 5120, select_q5_n6144_k5120, select_q5_n6144_k5120_unified},
+    ShapeEntry{7168, 5120, select_q5_n7168_k5120, select_q5_n7168_k5120_unified},
+    ShapeEntry{5120, 6144, select_q5_n5120_k6144, select_q5_n5120_k6144_unified},
+    ShapeEntry{5120, 17408, select_q5_n5120_k17408, select_q5_n5120_k17408_unified},
+    ShapeEntry{1152, 1152, select_q5_n1152_k1152, select_q5_n1152_k1152_unified},
+    ShapeEntry{1152, 4304, select_q5_n1152_k4304, select_q5_n1152_k4304_unified},
 };
 } // namespace
 
 Q5Launch select_q5_a16_launch(std::int32_t n, std::int32_t k, std::int32_t t) {
     if (t <= 0) throw std::invalid_argument("q5 linear: T must be positive");
     for (const auto& entry : kShapes) {
-        if (entry.n == n && entry.k == k) return entry.select(t);
+        if (entry.n != n || entry.k != k) continue;
+        if (entry.unified != nullptr && linear_route_table() == LinearRouteTable::Unified) {
+            return entry.unified(t);
+        }
+        return entry.select(t);
     }
     throw std::invalid_argument("q5 linear: unsupported shape");
 }
