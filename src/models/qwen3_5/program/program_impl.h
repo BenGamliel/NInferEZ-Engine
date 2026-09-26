@@ -1682,6 +1682,9 @@ struct PressurePlanningSessionImpl {
         // (a demote-to-host outcome). Zero when the owner cannot be preserved this way; the
         // protected maximal target then falls back to eviction for that owner.
         std::uint16_t preserve_choice = 0;
+        // With value-aware demotion, this private owner's rank by rebuild cost among the
+        // candidate's victims, charged to its eviction; zero for shared owners and otherwise.
+        std::uint32_t value_weight = 0;
     };
 
     struct CandidateOptions {
@@ -1830,6 +1833,7 @@ struct PressurePlanningSessionImpl {
                                               bool root_maximal = false);
     void index_target(std::uint32_t target_index);
     void populate_options(std::uint32_t candidate_index);
+    void rank_victims_by_rebuild_cost(CandidateOptions& options) const;
     [[nodiscard]] std::vector<PressureDecision>
     pressure_successors(const CandidateVictimOptions& victim_options,
                         const detail::PhysicalResources& residual,

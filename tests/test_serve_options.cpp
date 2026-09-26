@@ -639,6 +639,7 @@ int main() {
                                                {"--release-diverged-checkpoints"},
                                                {"--thorough-admission-search"},
                                                {"--recency-eviction"},
+                                               {"--value-aware-demote"},
                                                {"--disk-kv-path", "/tmp/l3"}}) {
         std::vector<std::string> arguments{"ninfer-serve", "model.ninfer",
                                            "--use-alt-prefix-caching"};
@@ -987,6 +988,7 @@ int main() {
                                         "--usage-chunk-choice",
                                         "--use-alt-prefix-caching",
                                         "--use-original-prefix-caching",
+                                        "--value-aware-demote",
                                         "--vision",
                                         "--vision-max-merged",
                                         "--vision-offload",
@@ -1197,6 +1199,11 @@ int main() {
                           .context_cache.recency_eviction &&
                       !parse({"ninfer-serve", "model.ninfer"}).context_cache.recency_eviction,
                   "--recency-eviction was not an off-by-default switch");
+        failures +=
+            check(parse({"ninfer-serve", "model.ninfer", "--value-aware-demote"})
+                          .context_cache.value_aware_demote &&
+                      !parse({"ninfer-serve", "model.ninfer"}).context_cache.value_aware_demote,
+                  "--value-aware-demote was not an off-by-default switch");
         failures +=
             check(parse({"ninfer-serve", "model.ninfer", "--kv-lease-growth"})
                           .context_cache.kv_lease_growth &&

@@ -303,6 +303,11 @@ struct ContextCacheOptions {
     // room, and incremental search may fully evict only inside that sacrificed tail and only an
     // owner Host cannot take. Off by default: the economic search alone chooses what goes.
     bool recency_eviction = false;
+    // Pressure search charges evicting a private conversation its rank by rebuild cost among the
+    // request's victims (0 for the cheapest), so among otherwise equal plans the search keeps the
+    // conversations most expensive to rebuild, demoted to Host, and evicts the cheapest. Off by
+    // default: it reorders the bounded search, which can then settle on a different plan.
+    bool value_aware_demote = false;
     // An active request's Device KV entitlement is its prompt plus a bounded window of its output
     // (4096 tokens, or the prefill chunk when larger), extended at decode-round boundaries, rather
     // than prompt plus the whole max_tokens budget. When the pool cannot extend it, idle retained
@@ -1378,6 +1383,7 @@ struct RuntimeStats {
     std::uint32_t device_backend_kv_lease_pages        = 0;
     std::size_t host_kv_occupied_bytes                 = 0;
     std::uint64_t pressure_private_owners_degraded     = 0;
+    std::uint64_t pressure_private_owners_demoted      = 0;
     std::uint64_t pressure_private_owners_evicted      = 0;
     std::uint64_t pressure_shared_owners_degraded      = 0;
     std::uint64_t pressure_shared_owners_evicted       = 0;

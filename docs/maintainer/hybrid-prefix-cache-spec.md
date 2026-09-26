@@ -14,9 +14,9 @@ and every speculative backend (none, MTP, DFlash, DFlash2).
 In this line the mode runs on one device: pipeline stages (`--devices` with more than one entry)
 are rejected with it, and so are the checkpoint catalog's own policies (`--auto-long-anchors`,
 `--auto-prefix-grid`, `--context-cache-policy`, `--release-diverged-checkpoints`,
-`--thorough-admission-search`, `--recency-eviction`, the disk tier). Host restores and snapshot
-copies take the rank-stream form of the KV and StateImage copy routines, and a Vision prefill uses
-the concurrent overlay window when one is configured. The measurements below are the original
+`--thorough-admission-search`, `--recency-eviction`, `--value-aware-demote`, the disk tier). Host
+restores and snapshot copies take the rank-stream form of the KV and StateImage copy routines, and a
+Vision prefill uses the concurrent overlay window when one is configured. The measurements below are the original
 author's on an RTX 5090.
 
 Coexistence rules:

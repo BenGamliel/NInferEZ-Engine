@@ -1,4 +1,5 @@
 #include "models/qwen3_5/program/planning/pressure_planner.h"
+#include "models/qwen3_5/program/planning/pressure_value_ranking.h"
 
 namespace ninfer::models::qwen3_5::detail {
 
@@ -479,7 +480,35 @@ void PressurePlanningSessionImpl::populate_options(std::uint32_t selected_candid
             throw std::overflow_error("pressure owner target count is not representable");
         }
     }
+    if (program->context_cache.value_aware_demote) { rank_victims_by_rebuild_cost(options); }
     options.populated = true;
+}
+
+void PressurePlanningSessionImpl::rank_victims_by_rebuild_cost(CandidateOptions& options) const {
+    using PlanningContractAccess = qwen3_5::detail::RuntimeContractAccess;
+    std::vector<std::uint8_t> is_shared;
+    std::vector<std::uint64_t> rebuild_cost;
+    is_shared.reserve(options.victims.size());
+    rebuild_cost.reserve(options.victims.size());
+    for (const CandidateVictimOptions& victim : options.victims) {
+        const Owner& owner = owners[victim.owner_index];
+        is_shared.push_back(owner.shared ? 1U : 0U);
+        std::uint64_t cost = 0;
+        if (!owner.shared) {
+            const SequenceState& sequence =
+                program->continuation_states[PlanningContractAccess::index(*owner.private_handle)];
+            const qwen3_5::ContinuationSummary summary = program->continuation_summary(sequence);
+            if (summary.endpoint) {
+                planning_saturating_add(cost, summary.endpoint->rebuild_work.tokens);
+                planning_saturating_add(cost, summary.endpoint->rebuild_work.attention_pairs);
+            }
+        }
+        rebuild_cost.push_back(cost);
+    }
+    const std::vector<std::uint32_t> weights = value_weights_for_victims(is_shared, rebuild_cost);
+    for (std::size_t index = 0; index < options.victims.size(); ++index) {
+        options.victims[index].value_weight = weights[index];
+    }
 }
 
 std::vector<PressureDecision> PressurePlanningSessionImpl::pressure_successors(
@@ -856,7 +885,13 @@ runtime::PressureTargetGuidance PressurePlanningSessionImpl::guidance_choices(
         approximate_pressure.removed =
             planning_resource_sum(approximate_pressure.removed, decision.effect.removed);
         estimated_pressure.append(decision.transfer_requirements);
-        const std::uint32_t units = degradation_units(decision);
+        std::uint32_t units = degradation_units(decision);
+        // Evicting a private owner loses a restorable checkpoint, so it also costs the owner's
+        // value rank: the guidance then prefers evicting the cheapest to rebuild.
+        if (decision.evicts_continuation) {
+            units = planning_saturating_u32(static_cast<std::uint64_t>(units) +
+                                            victim_options.value_weight);
+        }
         total_degradation =
             planning_saturating_u32(static_cast<std::uint64_t>(total_degradation) + units);
         total_dropped = planning_saturating_u32(static_cast<std::uint64_t>(total_dropped) +

@@ -210,6 +210,8 @@ std::string serve_usage_text(const char* argv0) {
            "  --recency-eviction            under pressure give up the least recently used\n"
            "                                owners first, only as many as needed, and demote\n"
            "                                kept ones to Host\n"
+           "  --value-aware-demote          under pressure prefer evicting the conversations\n"
+           "                                cheapest to rebuild and demoting the costliest\n"
            "  --kv-lease-growth             reserve a 4096-token output window and extend it\n"
            "                                instead of the whole max_tokens budget; an answer\n"
            "                                the pool cannot extend ends with length\n"
@@ -656,6 +658,10 @@ ServeOptions parse_serve_options(int argc, char** argv) {
             legacy_cache_flag                      = "--recency-eviction";
             options.context_cache.recency_eviction = true;
             context_capacity_explicit              = true;
+        } else if (arg == "--value-aware-demote") {
+            legacy_cache_flag                        = "--value-aware-demote";
+            options.context_cache.value_aware_demote = true;
+            context_capacity_explicit                = true;
         } else if (arg == "--kv-lease-growth") {
             options.context_cache.kv_lease_growth = true;
             context_capacity_explicit             = true;

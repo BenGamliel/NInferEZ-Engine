@@ -232,12 +232,12 @@ EngineOptions normalize_engine_options(EngineOptions options) {
                 "slots, private/shared catalogs, long anchors)");
         }
         if (cache.rolling_retention || cache.release_diverged_checkpoints ||
-            cache.thorough_admission_search || cache.recency_eviction ||
+            cache.thorough_admission_search || cache.recency_eviction || cache.value_aware_demote ||
             cache.automatic_long_anchors || !cache.disk_kv_path.empty()) {
             throw std::invalid_argument(
                 "the hybrid prefix cache does not accept Legacy cache policies (rolling retention, "
                 "diverged-checkpoint release, thorough admission search, recency eviction, "
-                "automatic long anchors, disk tier)");
+                "value-aware demotion, automatic long anchors, disk tier)");
         }
         // One pinned Host slab pool serves blocks and snapshots alike; its size is the only
         // capacity a deployment has to choose (docs/maintainer/hybrid-prefix-cache-spec.md §5.4).
@@ -307,6 +307,7 @@ EngineOptions normalize_engine_options(EngineOptions options) {
         cache.release_diverged_checkpoints = false;
         cache.thorough_admission_search    = false;
         cache.recency_eviction             = false;
+        cache.value_aware_demote           = false;
         cache.kv_lease_growth              = false;
         cache.automatic_long_anchors       = false;
         return options;

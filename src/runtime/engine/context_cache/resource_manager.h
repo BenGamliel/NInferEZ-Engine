@@ -1399,6 +1399,7 @@ public:
         out.pressure_spill_pages               = context_stats_.pressure_spill_pages;
         out.partial_tail_cow_pages             = context_stats_.partial_tail_cow_pages;
         out.pressure_private_owners_degraded   = context_stats_.pressure_private_owners_degraded;
+        out.pressure_private_owners_demoted    = context_stats_.pressure_private_owners_demoted;
         out.pressure_private_owners_evicted    = context_stats_.pressure_private_owners_evicted;
         out.pressure_shared_owners_degraded    = context_stats_.pressure_shared_owners_degraded;
         out.pressure_shared_owners_evicted     = context_stats_.pressure_shared_owners_evicted;
@@ -3221,6 +3222,12 @@ private:
         advance_revision(entry.revision);
         refresh_session_owner_revision(claim.capability.owner.id, slot, entry.revision);
         saturating_increment(context_stats_.pressure_private_owners_degraded);
+        // A retained owner whose endpoint state now lives on Host was demoted there, and stays
+        // restorable, rather than degraded in place.
+        if (result.final_summary->endpoint &&
+            result.final_summary->endpoint->state_residency != ReplicaResidency::DeviceOnly) {
+            saturating_increment(context_stats_.pressure_private_owners_demoted);
+        }
         record_checkpoint_drops(context_stats_, dropped);
         entry.state = CatalogState::Catalogued;
     }
