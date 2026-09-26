@@ -1240,10 +1240,10 @@ they do not infer request behavior from process-global counter deltas.
 
 | Event | Contents |
 |---|---|
-| `server_start` | artifact path, architecture, public name, actual formats and prefill signature; resolved Engine and context-cache capacities, thinking/non-thinking sampler defaults plus process overrides, thinking-history and thinking-budget defaults, Device arenas, the optional non-additive Vision layout inside the unified workspace, Host State/KV capacity and occupancy, KV sizing ledger, CUDA Graph allowance, CUDA/GPU environment, and redacted argv |
+| `server_start` | artifact path, architecture, public name, actual formats and prefill signature; resolved Engine and context-cache capacities and switches, n-gram drafting options, thinking/non-thinking sampler defaults plus process overrides, thinking-history and thinking-budget defaults, Device arenas, the optional non-additive Vision layout inside the unified workspace, Host State/KV capacity and occupancy, KV sizing ledger, CUDA Graph allowance and measured cost, CUDA/GPU environment, and redacted argv |
 | `request_start` | protocol, resolved sampler and seed, requested reasoning effort, actual initial thinking mode and optional budget, Responses semantic-change flag, output budget, stream/message/tool shape |
 | `request_rejected` | parsed request shape, requested reasoning effort, media-item count, `phase: "prepare"`, and the exact HTTP status/type/code/parameter/message for a synchronous preparation rejection |
-| `request_done` | finish reason, prompt/completion/cache/computed-prefill tokens, prefix reuse path, tool-call parse diagnostics, request-owned materialization cost/search diagnostics, thinking-budget application counters, unrounded request-stage seconds, per-request Engine Host exposure, and complete speculative-decoding counters |
+| `request_done` | finish reason, prompt/completion/cache/computed-prefill tokens, prefix reuse path, tool-call parse diagnostics, request-owned materialization cost/search diagnostics, thinking-budget application counters, unrounded request-stage seconds, per-request Engine Host exposure, and complete speculative-decoding counters including n-gram and draft-archive counters |
 | `request_error` | the resolved request configuration and the generation, cancellation, or pre-outcome transport terminal message |
 | `throughput` | interval token/decode/context-cache pressure counter deltas, authoritative worker Host-work deltas, current scheduler/resource gauges, and decode-round batch statistics |
 
@@ -1266,20 +1266,48 @@ claim model or global optimality, and aborted planning attempts are not publishe
 
 `request_done.result.tool_call_parse` records whether a complete marker was seen, the structured
 call count, empty non-string arguments omitted during normalization, schema-mismatched arguments
-preserved for consumer validation, and a stable text-fallback reason. Fallback reasons are `none`,
-`malformed_structure`, `duplicate_parameter`, `invalid_tool_name`, `undeclared_tool`, and
-`trailing_content`. These counters contain no tool arguments or generated text.
+preserved for consumer validation, `duplicate_parameters_repaired`, and a stable fallback reason. A
+parameter named more than once in one call keeps its last value, as in JSON object syntax, and
+counts once in `duplicate_parameters_repaired` for each repeat instead of demoting the call to text.
+`forced_call_closed` reports a forced call whose closing tag the decoder supplied. When the strict
+pass rejects a region, `recovered` reports that a recovery pass still produced calls from it (with
+`recovered_call_count` the calls only that pass kept), `malformed_call_reported` that an unreadable
+call became a call to the reserved error tool, and `trailing_content_dropped` that text after the
+last call was dropped. Fallback reasons are `none`, `malformed_structure`, `invalid_tool_name`,
+`undeclared_tool`, and `trailing_content`. These counters contain no tool arguments or generated
+text.
 
 `request_done.timings_seconds` contains `prepare`, `ttft`, `vision`, `prefill`, `decode`, and `total`
 as full-precision JSON numbers. Its `speculative` object contains `backend`, `draft_window`, `rounds`,
 `drafted_tokens`, `accepted_tokens`, `fallback_steps`, and `accepted_per_position`, and under
 `--adaptive-mtp` also `window_transitions` and `rounds_per_window`. Rates can be derived downstream
-from raw token counts and seconds instead of rounded stderr strings.
+from raw token counts and seconds instead of rounded stderr strings. `ngram_rounds`,
+`ngram_drafted_tokens`, and `ngram_accepted_tokens` are the part of `rounds`, `drafted_tokens`, and
+`accepted_tokens` whose proposal came from n-gram copy drafting, and `ngram_archive_rounds`,
+`ngram_archive_drafted_tokens`, and `ngram_archive_accepted_tokens` the part of those whose copy
+source was the retained draft archive (see [n-gram drafting](ngram.md)). The
+`speculative.ngram_archive` object reports that archive at the end of the request: `enabled` when
+the server has one (`--ngram-archive-mib`), `bound` when the request was bound to a draft session,
+`published` when its input and output were published into it, `generation` as the session's latest
+completed generation, `sources` and `session_bytes` as the bound session's retained source count and
+bytes, `total_bytes` as the whole archive's bytes, and `sampling_seed` as the effective seed after
+request-domain separation for a request that named a session, otherwise `null`.
 
 For `server_start.memory`, `workspace.capacity_bytes` is the only physical workspace allocation.
 When Vision is enabled, `vision_workspace` reports the aggregate prompt and maximum-item token
 bounds plus encode peak and handoff layout/usage within that same allocation; these bytes must not
 be added to `workspace.capacity_bytes`. The field is `null` when Vision is disabled.
+`cuda_graph_allowance_bytes` is the CUDA Graph memory the KV sizing reserved, and
+`cuda_graph_measured_bytes` the Device memory graph preparation actually took at startup (`0`
+without CUDA Graphs); the startup log warns when the second exceeds the first.
+
+`server_start.engine` records `ngram_draft_window` and `ngram_min_match` (`--ngram-draft-tokens`,
+`0` when n-gram drafting is off, and `--ngram-min-match`), the draft-archive budgets
+`ngram_archive_bytes` and `ngram_session_bytes` (`--ngram-archive-mib`, `0` keeps drafting
+request-local, and `--ngram-session-mib`), and `ngram_native_sessions`. Its `context_cache` object
+records the resolved capacities and the `rolling_retention`, `release_diverged_checkpoints`,
+`thorough_admission_search`, `automatic_long_anchors` and `long_anchor_min_spacing_tokens`
+settings.
 
 `request_done.engine_timing` separates FIFO `queue_wait_seconds`, blocking
 `device_wait_exposed_seconds`, and five mutually exclusive Host-active exposure phases under
@@ -1314,6 +1342,8 @@ counters as interval deltas; `occupancy` and `last_selection` are end-of-interva
 request-owned and appear only on the corresponding `request_done` event.
 `pressure.searches` counts plans accepted into Program resource transactions, including a transaction that later ends in
 request-local abort; committed victim counters likewise report the resulting stable cache changes.
+`salvage.published` counts cancelled requests whose live state was published as a continuation
+endpoint at its last committed frontier.
 
 The JSONL `throughput.host_work` object is the aggregation authority: the Engine worker counts each
 wall-time segment once, independent of batch size. `elapsed_seconds` contains the same five
