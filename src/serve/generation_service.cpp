@@ -274,6 +274,7 @@ ninfer::EngineOptions make_engine_options(const ServeOptions& options) {
     engine_options.rope_yarn_factor         = options.rope_yarn_factor;
     engine_options.structured_output        = options.structured_output;
     engine_options.concurrent_prefill       = options.concurrent_prefill;
+    engine_options.recover_invariant_failures = options.recover_invariant_failures;
     engine_options.thinking_budget_message  = options.thinking_budget_message;
     engine_options.cuda_graph_allowance_bytes =
         static_cast<std::size_t>(options.cuda_graph_allowance_mib) << 20;

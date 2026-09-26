@@ -1128,6 +1128,7 @@ The table lists executable defaults. The startup example selects a long-context 
 | `--max-concurrency N` | maximum admitted requests; valid range `1..8` | `1` |
 | `--max-pending-requests N` | additional requests allowed to wait for admission | `16` |
 | `--pending-timeout-ms N` | maximum preparation-plus-admission wait | `600000` |
+| `--recover-invariant-failures` | a broken internal invariant in the Engine worker fails the active and materializing requests and leaves the waiting ones queued, as recovery from out of memory does, instead of failing the Engine; eight consecutive recoveries without a completed unit still fail it | off |
 | `--prefill-chunk N` | text-prefill chunk | `1024` |
 | `--fast-prefill-kernel` | prefill an `int8` KV cache with the fast prompt-attention kernel (FP16 PV accumulation per 64-key tile) and round `--prefill-chunk` down to whole attention waves; a small perplexity cost (see [perplexity](perplexity.md)) | off |
 | `--log-stats-interval-ms N` | aggregate throughput report interval; `0` disables it | `5000` |
@@ -1365,9 +1366,9 @@ replaces that value with `<redacted>`. The existing stderr summaries remain avai
 but are rounded and are not the aggregation source. Console lines use local
 `[YYYY-MM-DD HH:MM:SS.mmm] [level]` timestamps. Engine runtime diagnostics are ordinary records
 prefixed `engine |` that `--log-level` filters: the device route profile the Engine installs and a
-calibration it runs are `info`; an ignored or unsaved profile, recovery from out of memory and
-context stores rebuilt after it are warnings; a worker crash or repeated recoveries that fail every
-pending request are errors. OpenAI Responses, OpenAI Chat, and Anthropic
+calibration it runs are `info`; an ignored or unsaved profile, recovery from out of memory or,
+with `--recover-invariant-failures`, from a broken invariant, and context stores rebuilt after it
+are warnings; a worker crash or repeated recoveries that fail every pending request are errors. OpenAI Responses, OpenAI Chat, and Anthropic
 generation requests receive a request ID when they enter synchronous preparation. Successful
 preparation produces `request_start`; a preparation failure produces `request_rejected` without a
 matching start. Later generation failures produce `request_error`. Schema/model validation

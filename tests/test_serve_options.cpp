@@ -789,6 +789,7 @@ int main() {
                                         "--prefill-cublas",
                                         "--presence-penalty",
                                         "--preserve-thinking",
+                                        "--recover-invariant-failures",
                                         "--release-diverged-checkpoints",
                                         "--request-log-jsonl",
                                         "--response-store-max-mib",
@@ -989,6 +990,10 @@ int main() {
                                   .concurrent_prefill &&
                               !parse({"ninfer-serve", "model.ninfer"}).concurrent_prefill,
                           "--concurrent-prefill was not an off-by-default switch");
+        failures += check(parse({"ninfer-serve", "model.ninfer", "--recover-invariant-failures"})
+                                  .recover_invariant_failures &&
+                              !parse({"ninfer-serve", "model.ninfer"}).recover_invariant_failures,
+                          "--recover-invariant-failures was not an off-by-default switch");
         failures += check(parse({"ninfer-serve", "model.ninfer", "--thorough-admission-search"})
                                   .context_cache.thorough_admission_search &&
                               !parse({"ninfer-serve", "model.ninfer"})

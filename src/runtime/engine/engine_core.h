@@ -72,6 +72,7 @@ public:
           structured_output_(options.structured_output),
           max_concurrency_(options.max_concurrency),
           thorough_admission_search_(options.context_cache.thorough_admission_search),
+          recover_invariant_failures_(options.recover_invariant_failures),
           max_outstanding_(static_cast<std::size_t>(options.max_concurrency) +
                            options.max_pending_requests),
           pending_timeout_(std::chrono::milliseconds(options.pending_timeout_ms)),
@@ -2067,11 +2068,11 @@ private:
         publish_runtime_stats();
     }
 
-    // Recover from any std::bad_alloc in the work loop by clearing active state and
-    // continuing.  The most common trigger is device-KV reservation failure, but host
-    // allocations can also trigger it.  Errors active and materializing requests, resets
-    // the scheduler and program state, but leaves pending requests in the FIFO so they
-    // can retry once memory is freed.  The worker loop continues after this.
+    // Recover from any std::bad_alloc in the work loop (and, with recover_invariant_failures, any
+    // std::logic_error) by clearing active state and continuing.  The most common trigger is
+    // device-KV reservation failure, but host allocations can also trigger it.  Errors active and
+    // materializing requests, resets the scheduler and program state, but leaves pending requests
+    // in the FIFO so they can retry once memory is freed.  The worker loop continues after this.
     // The worker holds execution_mutex_ across the failing operation and this cleanup.
     void recover_from_oom_locked(std::exception_ptr error) noexcept {
         if (!error) { error = oom_fallback_error_; }
@@ -2090,6 +2091,9 @@ private:
         if (materializing_request != nullptr) {
             force_complete_error(materializing_request, error);
         }
+        // The failing unit may have consumed the admission check: re-arm it so the still-pending
+        // FIFO requests are inspected again without waiting for a new submission.
+        request_admission_check();
         try { publish_runtime_stats(); } catch (...) {}
     }
 
@@ -2136,6 +2140,23 @@ private:
         }
         for (const auto& request : pending) { force_complete_error(request, error); }
         try { publish_runtime_stats(); } catch (...) {}
+    }
+
+    void crash_locked(const std::exception_ptr& error) noexcept {
+        try {
+            std::rethrow_exception(error);
+        } catch (const std::exception& e) {
+            publish_diagnostic(diagnostics_, DiagnosticLevel::Error, "worker crash: %s", e.what());
+        } catch (...) {
+            publish_diagnostic(diagnostics_, DiagnosticLevel::Error,
+                               "worker crash: unknown exception");
+        }
+        HostPhaseMeasurement cleanup = begin_host_phase();
+        fail_all_locked(error);
+        finish_engine_phase(cleanup, EngineHostPhase::Maintenance);
+        try {
+            publish_runtime_stats();
+        } catch (...) {}
     }
 
     void worker_loop() noexcept {
@@ -2276,23 +2297,28 @@ private:
                 // iteration as a fresh scheduling boundary (no decode continuity).
                 previous_unit_was_decode = false;
                 continue;
-            } catch (...) {
-                const std::exception_ptr error = std::current_exception();
-                try {
-                    std::rethrow_exception(error);
-                } catch (const std::exception& e) {
-                    publish_diagnostic(diagnostics_, DiagnosticLevel::Error, "worker crash: %s",
-                                       e.what());
-                } catch (...) {
+            } catch (const std::logic_error& invariant) {
+                if (!recover_invariant_failures_) {
+                    crash_locked(std::current_exception());
+                    return;
+                }
+                publish_diagnostic(diagnostics_, DiagnosticLevel::Warning,
+                                   "worker invariant failure: %s - recovering", invariant.what());
+                if (++oom_recovery_count_ > kOomMaxRecoveries) {
                     publish_diagnostic(diagnostics_, DiagnosticLevel::Error,
-                                       "worker crash: unknown exception");
+                                       "worker: %u consecutive recoveries - failing all pending",
+                                       oom_recovery_count_ - 1);
+                    fail_all_locked(std::current_exception());
+                    return;
                 }
                 HostPhaseMeasurement cleanup = begin_host_phase();
-                fail_all_locked(error);
+                recover_from_oom_locked(std::current_exception());
                 finish_engine_phase(cleanup, EngineHostPhase::Maintenance);
-                try {
-                    publish_runtime_stats();
-                } catch (...) {}
+                oom_backoff_             = kOomBackoffIterations;
+                previous_unit_was_decode = false;
+                continue;
+            } catch (...) {
+                crash_locked(std::current_exception());
                 return;
             }
             execution_lock.unlock();
@@ -2307,6 +2333,7 @@ private:
     const bool structured_output_;
     const std::uint32_t max_concurrency_;
     const bool thorough_admission_search_;
+    const bool recover_invariant_failures_;
     const std::size_t max_outstanding_;
     const std::chrono::milliseconds pending_timeout_;
     ResourceManagement resources_;

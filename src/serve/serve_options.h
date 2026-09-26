@@ -107,6 +107,8 @@ struct ServeOptions {
     bool webui_mcp_proxy = false;
     bool structured_output = false; // accept JSON/JSON Schema constrained requests
     bool concurrent_prefill = false; // admit to free lanes while other requests prefill
+    // --recover-invariant-failures: a worker logic_error fails the active requests, not the Engine.
+    bool recover_invariant_failures = false;
     // --unconstrained-response-format: without structured_output, generate a JSON or JSON Schema
     // request unconstrained instead of refusing it, for clients that always send a format.
     bool unconstrained_response_format = false;

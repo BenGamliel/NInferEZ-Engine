@@ -745,6 +745,7 @@ std::string format_server_start_json(
         {"rope_yarn_factor", engine_options.rope_yarn_factor},
         {"structured_output", engine_options.structured_output},
         {"concurrent_prefill", engine_options.concurrent_prefill},
+        {"recover_invariant_failures", engine_options.recover_invariant_failures},
         {"wddm_evictable_budget", engine_options.wddm_evictable_budget},
         {"mlp_a8_decode", engine_options.mlp_a8_decode},
         {"prefill_a8", engine_options.prefill_a8},

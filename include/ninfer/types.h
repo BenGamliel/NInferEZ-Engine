@@ -305,6 +305,10 @@ struct EngineOptions {
     // Admit waiting requests to free lanes while other requests prefill, instead of holding
     // admission until the staged prefill finishes.
     bool concurrent_prefill = false;
+    // A broken internal invariant (std::logic_error) in the worker fails the active and
+    // materializing requests and keeps serving the queue, as an out-of-memory failure does, instead
+    // of failing the Engine. Eight consecutive recoveries without a completed unit still fail it.
+    bool recover_invariant_failures = false;
     // Windows builds with NINFER_D3D12_RESIDENCY only: allocate the device arenas from a D3D12
     // heap held resident at maximum priority and budget the runtime against the adapter's
     // dedicated memory less the weights and a 512 MiB desktop floor, not against what is free now,

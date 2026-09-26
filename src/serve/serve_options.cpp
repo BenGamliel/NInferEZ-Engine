@@ -302,6 +302,9 @@ std::string serve_usage_text(const char* argv0) {
            "                                (default 384)\n"
            "  --max-pending-requests N      requests waiting for admission (default 16)\n"
            "  --pending-timeout-ms N        preparation-plus-admission wait (default 600000)\n"
+           "  --recover-invariant-failures  on a broken internal invariant, fail the active\n"
+           "                                requests and keep serving the queue instead of\n"
+           "                                failing the engine\n"
            "  --response-store-max-records N\n"
            "                                retained Responses objects (default 1024)\n"
            "  --response-store-max-mib N    Responses state budget (default 256)\n"
@@ -552,6 +555,8 @@ ServeOptions parse_serve_options(int argc, char** argv) {
             context_capacity_explicit                          = true;
         } else if (arg == "--concurrent-prefill") {
             options.concurrent_prefill = true;
+        } else if (arg == "--recover-invariant-failures") {
+            options.recover_invariant_failures = true;
         } else if (arg == "--thorough-admission-search") {
             options.context_cache.thorough_admission_search = true;
             context_capacity_explicit                       = true;
