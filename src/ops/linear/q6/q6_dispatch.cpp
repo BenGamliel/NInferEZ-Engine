@@ -1,4 +1,5 @@
 #include "ops/linear/q6/q6_dispatch.h"
+#include "ops/linear/common/route_table.h"
 #include "ops/linear/q6/q6_shapes.h"
 #include <array>
 #include <stdexcept>
@@ -8,20 +9,26 @@ namespace {
 struct ShapeEntry {
     std::int32_t n, k;
     Q6Launch (*select)(std::int32_t);
+    // The unified-template table; shapes without one keep the legacy routes everywhere.
+    Q6Launch (*unified)(std::int32_t) = nullptr;
 };
 
 constexpr std::array kShapes{
-    ShapeEntry{248320, 5120, select_q6_n248320_k5120},
+    ShapeEntry{248320, 5120, select_q6_n248320_k5120, select_q6_n248320_k5120_unified},
     ShapeEntry{34816, 5120, select_q6_n34816_k5120},
-    ShapeEntry{248320, 2048, select_q6_n248320_k2048},
-    ShapeEntry{1152, 1536, select_q6_n1152_k1536},
+    ShapeEntry{248320, 2048, select_q6_n248320_k2048, select_q6_n248320_k2048_unified},
+    ShapeEntry{1152, 1536, select_q6_n1152_k1536, select_q6_n1152_k1536_unified},
 };
 } // namespace
 
 Q6Launch select_q6_a16_launch(std::int32_t n, std::int32_t k, std::int32_t t) {
     if (t <= 0) throw std::invalid_argument("q6 linear: T must be positive");
     for (const auto& entry : kShapes) {
-        if (entry.n == n && entry.k == k) return entry.select(t);
+        if (entry.n != n || entry.k != k) continue;
+        if (entry.unified != nullptr && linear_route_table() == LinearRouteTable::Unified) {
+            return entry.unified(t);
+        }
+        return entry.select(t);
     }
     throw std::invalid_argument("q6 linear: unsupported shape");
 }
