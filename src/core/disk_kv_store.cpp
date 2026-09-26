@@ -126,6 +126,7 @@ DiskKVStore::DiskKVStore(Options options) : options_(std::move(options)) {
     }
     map_file(!reuse);
     readers_.assign(max_slots_, 0);
+    lru_stamps_.assign(max_slots_, kNoStamp);
     if (!load_index()) { rebuild_from_scan(); }
 }
 
@@ -176,6 +177,44 @@ void DiskKVStore::unmap_file() noexcept {
     file_handle_    = -1;
 }
 
+bool DiskKVStore::write_payload(std::uint32_t slot, std::span<const std::byte> bytes) noexcept {
+    const HANDLE file = reinterpret_cast<HANDLE>(file_handle_);
+    std::size_t done  = 0;
+    while (done < bytes.size()) {
+        const std::uint64_t offset = payload_offset(slot) + done;
+        OVERLAPPED at{};
+        at.Offset         = static_cast<DWORD>(offset & 0xFFFFFFFFULL);
+        at.OffsetHigh     = static_cast<DWORD>(offset >> 32U);
+        const auto length = static_cast<DWORD>(
+            std::min<std::size_t>(bytes.size() - done, std::size_t{1} << 30U));
+        DWORD written = 0;
+        if (!::WriteFile(file, bytes.data() + done, length, &written, &at) || written == 0) {
+            return false;
+        }
+        done += written;
+    }
+    return true;
+}
+
+bool DiskKVStore::read_payload(std::uint32_t slot, std::span<std::byte> destination) noexcept {
+    const HANDLE file = reinterpret_cast<HANDLE>(file_handle_);
+    std::size_t done  = 0;
+    while (done < destination.size()) {
+        const std::uint64_t offset = payload_offset(slot) + done;
+        OVERLAPPED at{};
+        at.Offset         = static_cast<DWORD>(offset & 0xFFFFFFFFULL);
+        at.OffsetHigh     = static_cast<DWORD>(offset >> 32U);
+        const auto length = static_cast<DWORD>(
+            std::min<std::size_t>(destination.size() - done, std::size_t{1} << 30U));
+        DWORD read = 0;
+        if (!::ReadFile(file, destination.data() + done, length, &read, &at) || read == 0) {
+            return false;
+        }
+        done += read;
+    }
+    return true;
+}
+
 #else
 
 void DiskKVStore::map_file(bool create) {
@@ -204,7 +243,47 @@ void DiskKVStore::unmap_file() noexcept {
     file_handle_ = -1;
 }
 
+bool DiskKVStore::write_payload(std::uint32_t slot, std::span<const std::byte> bytes) noexcept {
+    const int fd     = static_cast<int>(file_handle_);
+    std::size_t done = 0;
+    while (done < bytes.size()) {
+        const ssize_t written =
+            ::pwrite(fd, bytes.data() + done, bytes.size() - done,
+                     static_cast<off_t>(payload_offset(slot) + done));
+        if (written < 0 && errno == EINTR) { continue; }
+        if (written <= 0) { return false; }
+        done += static_cast<std::size_t>(written);
+    }
+    return true;
+}
+
+bool DiskKVStore::read_payload(std::uint32_t slot, std::span<std::byte> destination) noexcept {
+    const int fd     = static_cast<int>(file_handle_);
+    std::size_t done = 0;
+    while (done < destination.size()) {
+        const ssize_t read =
+            ::pread(fd, destination.data() + done, destination.size() - done,
+                    static_cast<off_t>(payload_offset(slot) + done));
+        if (read < 0 && errno == EINTR) { continue; }
+        if (read <= 0) { return false; }
+        done += static_cast<std::size_t>(read);
+    }
+    return true;
+}
+
 #endif
+
+void DiskKVStore::lru_touch_locked(std::uint32_t slot, std::uint64_t stamp) {
+    lru_erase_locked(slot);
+    lru_.emplace(stamp, slot);
+    lru_stamps_[slot] = stamp;
+}
+
+void DiskKVStore::lru_erase_locked(std::uint32_t slot) noexcept {
+    if (lru_stamps_[slot] == kNoStamp) { return; }
+    lru_.erase({lru_stamps_[slot], slot});
+    lru_stamps_[slot] = kNoStamp;
+}
 
 bool DiskKVStore::load_index() {
     std::FILE* file = std::fopen(index_path(options_.path).c_str(), "rb");
@@ -226,6 +305,8 @@ bool DiskKVStore::load_index() {
 
     index_.clear();
     index_.reserve(rows.size());
+    lru_.clear();
+    lru_stamps_.assign(max_slots_, kNoStamp);
     std::vector<bool> live(max_slots_, false);
     for (const IndexRow& row : rows) {
         if (row.slot >= max_slots_ || live[row.slot]) { continue; }
@@ -240,6 +321,7 @@ bool DiskKVStore::load_index() {
         index_[id]     = row.slot;
         live[row.slot] = true;
         clock_         = std::max(clock_, slot_header.last_used);
+        lru_touch_locked(row.slot, slot_header.last_used);
     }
     free_slots_.clear();
     for (std::uint32_t slot = max_slots_; slot-- > 0;) {
@@ -251,16 +333,19 @@ bool DiskKVStore::load_index() {
 void DiskKVStore::rebuild_from_scan() {
     index_.clear();
     free_slots_.clear();
+    lru_.clear();
+    lru_stamps_.assign(max_slots_, kNoStamp);
     clock_ = 0;
     std::vector<bool> live(max_slots_, false);
+    std::vector<std::byte> payload(options_.slot_size);
     for (std::uint32_t slot = 0; slot < max_slots_; ++slot) {
         const Header& slot_header = header(slot);
         if (slot_header.magic != Header::kMagic) { continue; }
-        const std::span<const std::byte> payload(base_ + payload_offset(slot), options_.slot_size);
-        if (crc32(payload) != slot_header.crc) { continue; }
+        if (!read_payload(slot, payload) || crc32(payload) != slot_header.crc) { continue; }
         index_[{slot_header.lo, slot_header.hi, slot_header.tag, slot_header.frontier}] = slot;
         live[slot]                                                                      = true;
         clock_ = std::max(clock_, slot_header.last_used);
+        lru_touch_locked(slot, slot_header.last_used);
     }
     for (std::uint32_t slot = max_slots_; slot-- > 0;) {
         if (!live[slot]) { free_slots_.push_back(slot); }
@@ -299,26 +384,29 @@ void DiskKVStore::persist_index_locked() {
     index_dirty_ = false;
 }
 
-void DiskKVStore::clear_slot(std::uint32_t slot) noexcept { header(slot) = Header{}; }
+void DiskKVStore::clear_slot(std::uint32_t slot) noexcept {
+    // A slot never written is a hole in the sparse file and reads as zeros: writing its header
+    // through the mapping would allocate the block, which faults on a full disk.
+    Header& slot_header = header(slot);
+    if (slot_header.magic != 0 || slot_header.last_used != 0) { slot_header = Header{}; }
+}
 
 std::optional<DiskKVIdentity> DiskKVStore::evict_one_lru_locked() {
-    std::optional<std::uint32_t> victim;
-    for (const auto& [id, slot] : index_) {
+    for (const auto& entry : lru_) {
+        // A copy: erasing the entry below frees the node the loop reads from.
+        const std::uint32_t slot = entry.second;
         if (readers_[slot] != 0) { continue; }
-        if (!victim || header(slot).last_used < header(*victim).last_used ||
-            (header(slot).last_used == header(*victim).last_used && slot < *victim)) {
-            victim = slot;
-        }
+        const Header& victim_header = header(slot);
+        const DiskKVIdentity id{victim_header.lo, victim_header.hi, victim_header.tag,
+                                victim_header.frontier};
+        lru_erase_locked(slot);
+        index_.erase(id);
+        clear_slot(slot);
+        free_slots_.push_back(slot);
+        index_dirty_ = true;
+        return id;
     }
-    if (!victim) { return std::nullopt; }
-    const Header& victim_header = header(*victim);
-    const DiskKVIdentity id{victim_header.lo, victim_header.hi, victim_header.tag,
-                            victim_header.frontier};
-    index_.erase(id);
-    clear_slot(*victim);
-    free_slots_.push_back(*victim);
-    index_dirty_ = true;
-    return id;
+    return std::nullopt;
 }
 
 std::uint32_t DiskKVStore::live_slots() const {
@@ -340,7 +428,8 @@ bool DiskKVStore::upsert_page(const DiskKVIdentity& id, std::span<const std::byt
         std::lock_guard lock(mutex_);
         if (const auto found = index_.find(id); found != index_.end()) {
             header(found->second).last_used = ++clock_;
-            index_dirty_                    = true;
+            lru_touch_locked(found->second, clock_);
+            index_dirty_ = true;
             return true;
         }
         if (free_slots_.empty()) {
@@ -358,9 +447,13 @@ bool DiskKVStore::upsert_page(const DiskKVIdentity& id, std::span<const std::byt
     // is written outside the lock. The header is stamped last, under the lock, so the page becomes
     // reachable only complete.
     const std::uint32_t crc = crc32(bytes.first(options_.slot_size));
-    std::memcpy(base_ + payload_offset(slot), bytes.data(), options_.slot_size);
+    const bool written      = write_payload(slot, bytes.first(options_.slot_size));
 
     std::lock_guard lock(mutex_);
+    if (!written) {
+        free_slots_.push_back(slot);
+        return false;
+    }
     if (index_.contains(id)) {
         free_slots_.push_back(slot);
         return true;
@@ -372,7 +465,8 @@ bool DiskKVStore::upsert_page(const DiskKVIdentity& id, std::span<const std::byt
                           .tag       = id.tag,
                           .frontier  = id.frontier,
                           .crc       = crc};
-    index_[id]   = slot;
+    index_[id] = slot;
+    lru_touch_locked(slot, stamp);
     index_dirty_ = true;
     if (!options_.defer_index_updates) { persist_index_locked(); }
     return true;
@@ -390,14 +484,14 @@ bool DiskKVStore::read_page(const DiskKVIdentity& id, std::span<std::byte> desti
         crc  = header(slot).crc;
         ++readers_[slot];
     }
-    const std::span<const std::byte> payload(base_ + payload_offset(slot), options_.slot_size);
-    const bool intact = !options_.verify_crc || crc32(payload) == crc;
-    if (intact) { std::memcpy(destination.data(), payload.data(), payload.size()); }
+    const bool intact = read_payload(slot, destination) &&
+                        (!options_.verify_crc || crc32(destination) == crc);
     std::lock_guard lock(mutex_);
     --readers_[slot];
     if (intact) {
         header(slot).last_used = ++clock_;
-        index_dirty_           = true;
+        lru_touch_locked(slot, clock_);
+        index_dirty_ = true;
     }
     return intact;
 }
@@ -422,7 +516,8 @@ void DiskKVStore::release_read(const ReadClaim& claim, bool intact) {
     --readers_[claim.slot];
     if (intact) {
         header(claim.slot).last_used = ++clock_;
-        index_dirty_                 = true;
+        lru_touch_locked(claim.slot, clock_);
+        index_dirty_ = true;
     }
 }
 
@@ -436,7 +531,8 @@ bool DiskKVStore::touch(const DiskKVIdentity& id) {
     const auto found = index_.find(id);
     if (found == index_.end()) { return false; }
     header(found->second).last_used = ++clock_;
-    index_dirty_                    = true;
+    lru_touch_locked(found->second, clock_);
+    index_dirty_ = true;
     return true;
 }
 
@@ -446,6 +542,7 @@ bool DiskKVStore::evict(const DiskKVIdentity& id) {
     if (found == index_.end() || readers_[found->second] != 0) { return false; }
     const std::uint32_t slot = found->second;
     index_.erase(found);
+    lru_erase_locked(slot);
     clear_slot(slot);
     free_slots_.push_back(slot);
     index_dirty_ = true;

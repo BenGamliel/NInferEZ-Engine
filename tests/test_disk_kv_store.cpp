@@ -107,6 +107,39 @@ void lru_and_persistence(const std::filesystem::path& root) {
     }
 }
 
+// The LRU order is rebuilt from the slot headers on open, from the published index or from a
+// scan: after a restart the page used least recently before it is still the first one evicted.
+void lru_order_survives_reopen(const std::filesystem::path& root) {
+    for (const bool lose_index : {false, true}) {
+        const DiskKVStore::Options options{
+            .path      = (root / (lose_index ? "order-scan" : "order-index")).string(),
+            .slot_size = kSlot,
+            .max_slots = 3};
+        {
+            DiskKVStore store(options);
+            check(store.upsert_page(id(1, 64), page(kSlot, 1)) &&
+                      store.upsert_page(id(2, 128), page(kSlot, 2)) &&
+                      store.upsert_page(id(3, 192), page(kSlot, 3)),
+                  "order seeds stored");
+            store.touch(id(1, 64));
+            std::vector<std::byte> out(kSlot);
+            check(store.read_page(id(2, 128), out), "a read refreshes the order");
+            store.flush_index();
+        }
+        if (lose_index) { std::filesystem::remove(options.path + ".idx"); }
+        DiskKVStore store(options);
+        check(store.index_rebuilt_from_scan() == lose_index, "the reopen path is the one intended");
+        std::vector<DiskKVIdentity> evicted;
+        check(store.upsert_page(id(4, 256), page(kSlot, 4), &evicted) && evicted.size() == 1 &&
+                  evicted.front() == id(3, 192),
+              "after a reopen a full store evicts the page used least recently");
+        evicted.clear();
+        check(store.upsert_page(id(5, 320), page(kSlot, 5), &evicted) && evicted.size() == 1 &&
+                  evicted.front() == id(1, 64),
+              "eviction continues in the order the pages were last used");
+    }
+}
+
 void corruption_is_a_miss(const std::filesystem::path& root) {
     const DiskKVStore::Options options{
         .path = (root / "one").string(), .slot_size = kSlot, .max_slots = 1};
@@ -213,6 +246,7 @@ int main() {
     try {
         const std::filesystem::path root = fresh_directory();
         lru_and_persistence(root);
+        lru_order_survives_reopen(root);
         corruption_is_a_miss(root);
         capacity_sizing(root);
         concurrent_reads_survive_eviction(root);

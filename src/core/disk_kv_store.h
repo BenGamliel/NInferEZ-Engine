@@ -15,9 +15,11 @@
 #include <cstdint>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace ninfer {
@@ -167,6 +169,15 @@ private:
     void clear_slot(std::uint32_t slot) noexcept;
     // Evicts the least recently used live slot nobody is reading. Caller holds mutex_.
     std::optional<DiskKVIdentity> evict_one_lru_locked();
+    // Payloads move through positioned reads and writes, not the mapping: a store larger than
+    // memory makes mapped copies fault page by page, and a mapped write into a sparse slot on a
+    // full disk raises SIGBUS where a positioned write returns an error, which a pure cache turns
+    // into "not stored". False on any I/O error or short transfer.
+    [[nodiscard]] bool write_payload(std::uint32_t slot, std::span<const std::byte> bytes) noexcept;
+    [[nodiscard]] bool read_payload(std::uint32_t slot, std::span<std::byte> destination) noexcept;
+    // Moves a live slot to `stamp` in the LRU order, or erases it. Caller holds mutex_.
+    void lru_touch_locked(std::uint32_t slot, std::uint64_t stamp);
+    void lru_erase_locked(std::uint32_t slot) noexcept;
 
     mutable std::mutex mutex_;
     Options options_;
@@ -183,6 +194,12 @@ private:
     std::unordered_map<DiskKVIdentity, std::uint32_t, DiskKVIdentityHash> index_;
     std::vector<std::uint32_t> free_slots_;
     std::vector<std::uint32_t> readers_;
+    // Live slots by (LRU stamp, slot), so eviction takes the coldest slot without reading every
+    // header under the lock; rebuilt from the slot headers on open. lru_stamps_ holds each slot's
+    // key, kNoStamp while the slot is not live.
+    static constexpr std::uint64_t kNoStamp = ~std::uint64_t{0};
+    std::set<std::pair<std::uint64_t, std::uint32_t>> lru_;
+    std::vector<std::uint64_t> lru_stamps_;
 };
 
 } // namespace ninfer
