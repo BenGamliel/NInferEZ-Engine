@@ -218,6 +218,11 @@ struct ContextCacheOptions {
     // by default: a client that switches back to an earlier branch of the conversation, or another
     // conversation that shares that prefix, could still have reused it.
     bool release_diverged_checkpoints = false;
+    // Admission searches for a reuse plan for up to 250 ms at every boundary, and a request whose
+    // plan is worth more earns a longer base grant, instead of 50 ms at an idle boundary and 10 ms
+    // while other requests run. Off by default: a new request can then pause running decode for
+    // up to that long, where a missed large prefix costs its whole re-prefill.
+    bool thorough_admission_search = false;
 };
 
 struct ContextCostOptions {

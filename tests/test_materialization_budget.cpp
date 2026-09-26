@@ -61,6 +61,29 @@ int main() {
                 "an already-seeded candidate renewed solely on an incomplete optimistic estimate");
         require(seeded.allow(5 * ms, ms, ms, 70'000 * ms, true, 1, false),
                 "a complete profitable refinement was denied after seeding");
+        // A thorough boundary allows 250 ms even while others run, and its base grant scales with
+        // the incumbent's value at stake: the 5 ms floor for a cheap request, cost/20 above it, up
+        // to the whole allowance, and nothing for a saturated cost.
+        const auto thorough      = PlanningAllowance::boundary(0, 0, true);
+        const auto thorough_busy = PlanningAllowance::boundary(2, 0, true);
+        require(thorough.limit_ns == 250 * ms && thorough_busy.limit_ns == 250 * ms,
+                "a thorough boundary did not allow 250 ms while others run");
+        require(MaterializationSearchBudget(thorough, 0, ms).granted_ns() == 5 * ms,
+                "a cheap request lost its 5 ms floor grant");
+        require(MaterializationSearchBudget(thorough, 0, 400 * ms).granted_ns() == 20 * ms,
+                "the base grant did not scale with the incumbent cost");
+        require(MaterializationSearchBudget(thorough, 0, 80'000 * ms).granted_ns() ==
+                    thorough.limit_ns,
+                "an expensive grant did not reach the planning allowance");
+        require(MaterializationSearchBudget(thorough, 0, UINT64_MAX).granted_ns() == 0,
+                "a saturated cost was used as evidence of large value");
+        MaterializationSearchBudget floor(thorough, 0, ms);
+        require(!floor.allow(5 * ms, ms, ms, ms, false, 1),
+                "a cheap request renewed past its floor on a low gain");
+        MaterializationSearchBudget renew(thorough, 0, 400 * ms);
+        require(renew.allow(20 * ms, 2 * ms, 3 * ms, 70'000 * ms, true, 1) &&
+                    renew.granted_ns() == 40 * ms && renew.renewals() == 1,
+                "a valuable completion could not extend past the scaled grant");
         std::atomic<bool> cancelled{false};
         auto controlled                = PlanningAllowance::boundary(0, 0);
         controlled.cancellation        = &cancelled;

@@ -70,6 +70,7 @@ public:
         : instance_(instance), device_(device), max_context_(options.max_context),
           structured_output_(options.structured_output),
           max_concurrency_(options.max_concurrency),
+          thorough_admission_search_(options.context_cache.thorough_admission_search),
           max_outstanding_(static_cast<std::size_t>(options.max_concurrency) +
                            options.max_pending_requests),
           pending_timeout_(std::chrono::milliseconds(options.pending_timeout_ms)),
@@ -1785,7 +1786,8 @@ private:
                 return request && !request->capture_pending &&
                        (request->is_decode_ready() || request->is_prefilling());
             }));
-        const PlanningAllowance allowance = PlanningAllowance::boundary(other_runnable);
+        const PlanningAllowance allowance = PlanningAllowance::boundary(
+            other_runnable, planning_now_ns(), thorough_admission_search_);
         DetailScope detail(*this, &RuntimeHostWorkStats::admission_policy_ns,
                            &RuntimeHostWorkStats::admission_policy_invocations,
                            nvtx::Name::AdmissionPolicy);
@@ -2285,6 +2287,7 @@ private:
     const std::uint32_t max_context_;
     const bool structured_output_;
     const std::uint32_t max_concurrency_;
+    const bool thorough_admission_search_;
     const std::size_t max_outstanding_;
     const std::chrono::milliseconds pending_timeout_;
     ResourceManagement resources_;

@@ -25,12 +25,24 @@ struct PlanningAllowance {
     std::uint32_t affected_requests       = 1;
     const std::atomic<bool>* cancellation = nullptr;
     std::uint64_t control_deadline_ns     = std::numeric_limits<std::uint64_t>::max();
+    // The base search grant scales with the value at stake instead of a flat 5 ms.
+    bool value_scaled_grant = false;
 
-    [[nodiscard]] static PlanningAllowance
-    boundary(std::uint32_t other_runnable, std::uint64_t now = planning_now_ns()) noexcept {
-        return {.started_ns        = now,
-                .limit_ns          = other_runnable == 0 ? 50'000'000ULL : 10'000'000ULL,
-                .affected_requests = 1U + other_runnable};
+    static constexpr std::uint64_t kThoroughBoundaryNs = 250'000'000;
+
+    // A thorough boundary gets the full 250 ms even while other requests run: admission happens
+    // once per request, and a search stopped early can miss a reusable prefix worth tens of
+    // seconds of re-prefill to save the running decode one pause of at most this allowance. The
+    // runnable requests still share the economic bound through `affected_requests`.
+    [[nodiscard]] static PlanningAllowance boundary(std::uint32_t other_runnable,
+                                                    std::uint64_t now = planning_now_ns(),
+                                                    bool thorough     = false) noexcept {
+        return {.started_ns         = now,
+                .limit_ns           = thorough            ? kThoroughBoundaryNs
+                                      : other_runnable == 0 ? 50'000'000ULL
+                                                            : 10'000'000ULL,
+                .affected_requests  = 1U + other_runnable,
+                .value_scaled_grant = thorough};
     }
 
     [[nodiscard]] std::uint64_t remaining(std::uint64_t now) const noexcept {
@@ -50,8 +62,10 @@ public:
     MaterializationSearchBudget(PlanningAllowance allowance, std::uint64_t started,
                                 std::uint64_t initial_cost) noexcept
         : allowance_(allowance), started_(started),
-          granted_(std::min(
-              {std::uint64_t{5'000'000}, economic(initial_cost), allowance.remaining(started)})) {}
+          granted_(std::min(allowance.value_scaled_grant
+                                ? value_scaled_grant(initial_cost)
+                                : std::min(kMinimumGrantNs, economic(initial_cost)),
+                            allowance.remaining(started))) {}
 
     [[nodiscard]] bool allow(std::uint64_t now, std::uint64_t next_operation_ns,
                              std::uint64_t completion_ns, std::uint64_t gain_ns,
@@ -112,9 +126,21 @@ public:
     }
 
 private:
+    static constexpr std::uint64_t kMinimumGrantNs = 5'000'000;
+    static constexpr std::uint64_t kCostDivisor    = 20;
+
+    // The incumbent's machine-work cost is the value a better plan can save, so an expensive one
+    // earns a longer search, up to the thorough boundary, and a cheap one keeps the 5 ms floor. A
+    // saturated cost is not evidence of large value and earns nothing.
+    [[nodiscard]] static std::uint64_t value_scaled_grant(std::uint64_t incumbent_cost) noexcept {
+        if (incumbent_cost == std::numeric_limits<std::uint64_t>::max()) { return 0; }
+        return std::clamp(incumbent_cost / kCostDivisor, kMinimumGrantNs,
+                          PlanningAllowance::kThoroughBoundaryNs);
+    }
+
     [[nodiscard]] std::uint64_t economic(std::uint64_t gain) const noexcept {
         if (gain == std::numeric_limits<std::uint64_t>::max()) { return 0; }
-        return gain / 20U / std::max(1U, allowance_.affected_requests);
+        return gain / kCostDivisor / std::max(1U, allowance_.affected_requests);
     }
 
     bool boundary_limited_ = false;

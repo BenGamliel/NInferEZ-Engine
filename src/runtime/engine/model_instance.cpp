@@ -189,6 +189,7 @@ EngineOptions normalize_engine_options(EngineOptions options) {
         cache.disk_kv_directstorage = false;
         cache.rolling_retention            = false;
         cache.release_diverged_checkpoints = false;
+        cache.thorough_admission_search    = false;
         return options;
     }
 
