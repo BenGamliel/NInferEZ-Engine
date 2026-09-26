@@ -772,7 +772,24 @@ lane 或 open transaction 阻塞，结果为 temporarily blocked。
 ### 8.7 有界 heuristic search
 
 Materialization 与 shared capture 使用两个 typed entrypoint。Materialization 的 incumbent 是已验证
-identity 或 root maximal；shared capture 的 incumbent 是 Skip，只有 exact `NetGain>0` 才替换。
+identity 或 root maximal；启用 `ContextCacheOptions::recency_eviction`（`ninfer-serve
+--recency-eviction`，默认关闭）时，root maximal 之前先取 escape-hatch recency ladder 中「sacrifice 最少且
+可 adoption」的一级 rung，root maximal（clear-all）只作为 liveness backstop。shared capture 的 incumbent
+是 Skip，只有 exact `NetGain>0` 才替换。
+
+ResourceManager 只在该开关打开时把 recency 排名交给 planning session；没有排名时 session 不生成
+demote-to-host 的 preserve outcome，完全 evict 对每个 owner 都可达，与原有经济搜索一致。
+
+Escape-hatch rung 把 private owner 与 shared owner 放进同一个 recency 排名（最近一次命中或发布优先——
+刚发布、尚未被命中的 continuation 或 shared prefix 也算最近使用；tie 保持输入顺序）：rung k 完全 evict
+最旧的 k 个 owner，其余 owner 保持不变——其中仍可由 Host 承载的 owner（private 或 shared）通过
+demote-to-host 释放 device 资源并保留 host copy。Shared prefix 不再被每一级 rung 无条件销毁：一个仍被
+新会话频繁命中的 shared prefix 会比闲置的会话活得更久。Rung 只有在 *physical 可行且 logical adoption
+成功* 时才算数，因此 publication-only 这类物理上放得下、但需要一个 released owner 的 admission 也能找到
+最小 sacrifice；没有 host tier 的池同样能表达「evict 最旧的 k 个、其余保留」。该最小 sacrifice 同时 licence
+增量搜索：incremental enumeration 只能完全 evict 这条 LRU tail，tail 之外的 owner 只能被 demote/degrade/
+保留，所以计划不会用一个更近 prefix 的内容换取更旧 prefix 的 device KV。identity 可行时 licence 为空，即
+不需要 eviction。
 
 一次 planning problem 中：
 

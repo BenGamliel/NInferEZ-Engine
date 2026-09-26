@@ -248,6 +248,13 @@ struct ContextCacheOptions {
     // while other requests run. Off by default: a new request can then pause running decode for
     // up to that long, where a missed large prefix costs its whole re-prefill.
     bool thorough_admission_search = false;
+    // Pressure ranks private conversations and shared prefixes in one least-recently-used order
+    // (latest hit or publication). A request that does not fit gives up the fewest oldest owners
+    // that make it fit and spares any of them it does not need, instead of clearing every owner
+    // it cannot reuse; kept owners, shared prefixes included, are demoted to Host where it has
+    // room, and incremental search may fully evict only inside that sacrificed tail and only an
+    // owner Host cannot take. Off by default: the economic search alone chooses what goes.
+    bool recency_eviction = false;
     // The engine anchors message boundaries itself: every request offers private long anchors at
     // up to L message boundaries, on the grid long_anchor_min_spacing_tokens sets, so a later
     // request that rewrites history there resumes from the anchor instead of root. L then defaults

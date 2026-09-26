@@ -789,6 +789,7 @@ int main() {
                                         "--prefill-cublas",
                                         "--presence-penalty",
                                         "--preserve-thinking",
+                                        "--recency-eviction",
                                         "--recover-invariant-failures",
                                         "--release-diverged-checkpoints",
                                         "--request-log-jsonl",
@@ -999,6 +1000,11 @@ int main() {
                               !parse({"ninfer-serve", "model.ninfer"})
                                    .context_cache.thorough_admission_search,
                           "--thorough-admission-search was not an off-by-default switch");
+        failures +=
+            check(parse({"ninfer-serve", "model.ninfer", "--recency-eviction"})
+                          .context_cache.recency_eviction &&
+                      !parse({"ninfer-serve", "model.ninfer"}).context_cache.recency_eviction,
+                  "--recency-eviction was not an off-by-default switch");
         failures += check(!parse({"ninfer-serve", "model.ninfer"}).log_colours &&
                               parse({"ninfer-serve", "model.ninfer", "--log-colours", "on"})
                                       .log_colours == true &&

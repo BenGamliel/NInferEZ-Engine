@@ -196,6 +196,9 @@ std::string serve_usage_text(const char* argv0) {
            "  --thorough-admission-search   search up to 250 ms for a new request's reuse\n"
            "                                plan even while others decode (otherwise 10 ms),\n"
            "                                longer for a costly request\n"
+           "  --recency-eviction            under pressure give up the least recently used\n"
+           "                                owners first, only as many as needed, and demote\n"
+           "                                kept ones to Host\n"
            "  --concurrent-prefill          admit waiting requests to free lanes while other\n"
            "                                requests prefill\n"
            "  --disk-kv-path DIR            disk tier: evicted continuations write their KV\n"
@@ -560,6 +563,9 @@ ServeOptions parse_serve_options(int argc, char** argv) {
         } else if (arg == "--thorough-admission-search") {
             options.context_cache.thorough_admission_search = true;
             context_capacity_explicit                       = true;
+        } else if (arg == "--recency-eviction") {
+            options.context_cache.recency_eviction = true;
+            context_capacity_explicit              = true;
         } else if (arg == "--max-private-continuations") {
             options.context_cache.max_private_continuations =
                 static_cast<std::uint32_t>(parse_nonnegative_int(

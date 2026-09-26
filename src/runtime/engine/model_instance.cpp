@@ -196,6 +196,7 @@ EngineOptions normalize_engine_options(EngineOptions options) {
         cache.rolling_retention            = false;
         cache.release_diverged_checkpoints = false;
         cache.thorough_admission_search    = false;
+        cache.recency_eviction             = false;
         cache.automatic_long_anchors       = false;
         return options;
     }

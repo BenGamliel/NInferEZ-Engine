@@ -34,6 +34,7 @@ public:
 
     struct OwnerPolicy {
         PlanningOwnerId owner;
+        std::uint64_t last_hit_epoch           = 0;
         std::uint32_t private_retention_weight = 0;
         bool explicit_shared_credit            = false;
     };
@@ -56,6 +57,9 @@ public:
         std::span<const PlanningOwnerId> shared_owner_ids;
         std::span<const OwnerPolicy> owner_policies;
         std::span<const CheckpointPolicy> checkpoint_policies;
+        // Private and shared owners ranked by recency (latest hit or publication), most recent
+        // first.
+        std::span<const PlanningOwnerId> recency_owner_ids;
         std::optional<PlanningOwnerId> direct_shared_victim;
         std::uint64_t candidate_demand_mask         = 0;
         std::uint64_t candidate_rebuild_ns          = 0;
@@ -93,7 +97,7 @@ public:
 
         auto session = program.begin_capture_pressure_planning(
             *input.capture, input.private_owners, input.private_owner_ids, input.shared_owners,
-            input.shared_owner_ids);
+            input.shared_owner_ids, input.recency_owner_ids);
         const PlanningCandidateId candidate_id = session.candidate_id();
 
         const PressureTargetHandle identity         = session.identity_target();
@@ -160,9 +164,16 @@ public:
             if (!assessment.expandable || target_marked(queued.ordinal, kTargetExpanded)) {
                 continue;
             }
-            auto prepared                 = session.prepare_expansion(queued.target);
             const std::uint32_t remaining = input.target_budget - canonical_targets;
-            if (prepared.new_canonical_count() > remaining) {
+            if (remaining == 0) { continue; }
+            // The session arena also holds targets this scenario does not budget (identity
+            // target, maximal fallback), so bound the commit by the arena's true remaining
+            // capacity; commit_expansion rejects a commit that overflows it.
+            const std::uint32_t commit_capacity =
+                std::min(remaining, session.optional_targets_remaining());
+            if (commit_capacity == 0) { continue; }
+            auto prepared = session.prepare_expansion(queued.target);
+            if (prepared.new_canonical_count() > commit_capacity) {
                 session.discard_expansion(std::move(prepared));
                 continue;
             }
