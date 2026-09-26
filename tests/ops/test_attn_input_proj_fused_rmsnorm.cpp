@@ -120,15 +120,25 @@ int run_case(const Weight& weight, int tokens, bool measure) {
         graph.instantiate(definition);
         graph.launch(device.stream);
         cuda_synchronize(device.stream);
-        failures +=
-            compare_bytes("graph q" + suffix, static_cast<const std::uint8_t*>(reference_q.p),
-                          static_cast<const std::uint8_t*>(fused_q.p), reference_q.bytes);
+        failures += compare_bytes("graph q" + suffix,
+                                  static_cast<const std::uint8_t*>(reference_q.p),
+                                  static_cast<const std::uint8_t*>(fused_q.p), reference_q.bytes);
+        failures += compare_bytes("graph gate" + suffix,
+                                  static_cast<const std::uint8_t*>(reference_gate.p),
+                                  static_cast<const std::uint8_t*>(fused_gate.p),
+                                  reference_gate.bytes);
+        failures += compare_bytes("graph k" + suffix,
+                                  static_cast<const std::uint8_t*>(reference_k.p),
+                                  static_cast<const std::uint8_t*>(fused_k.p), reference_k.bytes);
+        failures += compare_bytes("graph v" + suffix,
+                                  static_cast<const std::uint8_t*>(reference_v.p),
+                                  static_cast<const std::uint8_t*>(fused_v.p), reference_v.bytes);
     }
     if (reference_workspace.used() != 0 || fused_workspace.used() != 0) {
         std::cerr << "attention input workspace scope was not released\n";
         ++failures;
     }
-    if (measure && tokens != 1500 && failures == 0) {
+    if (measure && failures == 0) {
         const auto reference_stage = [&] {
             ops::rmsnorm(residual, gain, kEps, true, hidden, nullptr);
             ops::attn_input_proj(hidden, weight, rq, rg, rk, rv, ops::LinearPolicy::AllowA4,
@@ -174,10 +184,28 @@ int main() {
         DevicePackedWeight parent(quantized_weight::make_patterned_weight(QType::NVFP4, kParentRows,
                                                                           kHidden, 331U, options));
         const Weight weight = parent.view();
+        // Eligibility reads qtype/layout/shape only (never the payload), so
+        // field-override copies are safe negatives here.
+        Weight wrong_qtype  = weight;
+        Weight wrong_layout = weight;
+        Weight wrong_n      = weight;
+        Weight wrong_k      = weight;
+        wrong_qtype.qtype   = QType::BF16;
+        wrong_layout.layout = QuantLayout::RowSplit;
+        wrong_n.n           = kParentRows - 1;
+        wrong_k.k           = kHidden - 1;
         if (ops::attn_input_proj_fused_rmsnorm_nvfp4_eligible(weight, ops::LinearPolicy::A16Only,
                                                               1024) ||
             ops::attn_input_proj_fused_rmsnorm_nvfp4_eligible(weight, ops::LinearPolicy::AllowA4,
                                                               1023) ||
+            ops::attn_input_proj_fused_rmsnorm_nvfp4_eligible(wrong_qtype, ops::LinearPolicy::AllowA4,
+                                                              1024) ||
+            ops::attn_input_proj_fused_rmsnorm_nvfp4_eligible(wrong_layout,
+                                                              ops::LinearPolicy::AllowA4, 1024) ||
+            ops::attn_input_proj_fused_rmsnorm_nvfp4_eligible(wrong_n, ops::LinearPolicy::AllowA4,
+                                                              1024) ||
+            ops::attn_input_proj_fused_rmsnorm_nvfp4_eligible(wrong_k, ops::LinearPolicy::AllowA4,
+                                                              1024) ||
             !ops::attn_input_proj_fused_rmsnorm_nvfp4_eligible(weight, ops::LinearPolicy::AllowA4,
                                                                1024)) {
             std::cerr << "fused route eligibility mismatch\n";
