@@ -266,6 +266,28 @@ int main() {
                       "serve help omits --kv-dtype rk2v4-e8");
     const ServeOptions yarn = parse({"ninfer-serve", "model.ninfer", "--rope-yarn"});
     failures += check(yarn.rope_yarn && !defaults.rope_yarn, "--rope-yarn did not select YaRN");
+    failures += check(defaults.rope_yarn_factor == 1.0F, "serving YaRN factor must default to 1");
+    for (const auto* factor : {"1", "2.5", "4"}) {
+        const ServeOptions fixed =
+            parse({"ninfer-serve", "model.ninfer", "--rope-yarn-factor", factor});
+        failures += check(fixed.rope_yarn_factor == std::stof(factor) &&
+                              fixed.max_context == 8192 &&
+                              fixed.kv_capacity.explicit_tokens == 8192 &&
+                              make_engine_options(fixed).rope_yarn_factor == std::stof(factor),
+                          "a YaRN factor must reach the Engine without growing the context");
+    }
+    for (const char* factor : std::initializer_list<const char*>{
+             "0", "0.99", "4.01", "-1", "nan", "inf", "-inf", "1e999", "2x", "", nullptr}) {
+        bool rejected = false;
+        try {
+            if (factor == nullptr) {
+                (void)parse({"ninfer-serve", "model.ninfer", "--rope-yarn-factor"});
+            } else {
+                (void)parse({"ninfer-serve", "model.ninfer", "--rope-yarn-factor", factor});
+            }
+        } catch (const std::invalid_argument&) { rejected = true; }
+        failures += check(rejected, "an invalid or missing YaRN factor was accepted");
+    }
     const ServeOptions wddm = parse({"ninfer-serve", "model.ninfer", "--wddm-evictable-budget"});
     failures += check(wddm.wddm_evictable_budget && !defaults.wddm_evictable_budget,
                       "--wddm-evictable-budget did not select the WDDM budget");
@@ -757,6 +779,7 @@ int main() {
                                         "--response-store-max-mib",
                                         "--response-store-max-records",
                                         "--rope-yarn",
+                                        "--rope-yarn-factor",
                                         "--seed",
                                         "--spec",
                                         "--stage-layers",

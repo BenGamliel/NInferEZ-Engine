@@ -1,4 +1,5 @@
 #include "serve/serve_options.h"
+#include "product/rope_yarn_options.h"
 #include "product/speculative_options.h"
 
 #include <cerrno>
@@ -138,6 +139,9 @@ std::string serve_usage_text(const char* argv0) {
            "  --rope-yarn                   past the model's native window, apply Qwen's\n"
            "                                YaRN at factor max-context / native instead of\n"
            "                                unscaled RoPE\n"
+           "  --rope-yarn-factor F          apply YaRN at this fixed factor, 1..4, to every\n"
+           "                                position whatever --max-context is (default 1:\n"
+           "                                as --rope-yarn decides)\n"
            "  --wddm-evictable-budget       Windows D3D12 builds: budget against dedicated\n"
            "                                memory, holding arenas resident\n"
            "\n"
@@ -694,6 +698,9 @@ ServeOptions parse_serve_options(int argc, char** argv) {
             options.gdn_state_fp16 = true;
         } else if (arg == "--rope-yarn") {
             options.rope_yarn = true;
+        } else if (arg == "--rope-yarn-factor") {
+            options.rope_yarn_factor =
+                product::parse_rope_yarn_factor(require_value("--rope-yarn-factor"));
         } else if (arg == "--wddm-evictable-budget") {
             options.wddm_evictable_budget = true;
         } else if (arg == "--mlp-a8-decode") {

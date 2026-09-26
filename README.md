@@ -181,7 +181,8 @@ named), re-implemented here:
   Face and vLLM do. On Ternary Bonsai 2 with `rk2v4-e8`, a needle test (three codes at 33, 66 and
   90% of a prose document) finds all three at 500,000 tokens without the flag and two of three
   with it at 131,072, 500,000 and 1,000,000 tokens, so YaRN stays off unless plain RoPE stops
-  answering.
+  answering. `--rope-yarn-factor F` fixes the factor instead, for every position whatever the
+  window.
 - **`rk2v4-e8` KV cache** (with Daniel Parker, who also proposed it upstream as Neroued/ninfer#173).
   Each 8-dimension block of a rotated, G64-scaled key is stored in two
   bytes: the nearest of E8's 240 roots, and a byte holding a 4-bit log-radius and a signed

@@ -158,9 +158,10 @@ def estimate(
 ) -> dict:
     if report.get("artifact_type") != "ninfer_bench_report":
         raise ValueError("input must be a ninfer_bench JSON report")
-    if report.get("schema_version") != 16:
+    # v17 only adds rope_yarn_factor, which leaves the counted work unchanged.
+    if report.get("schema_version") not in (16, 17):
         raise ValueError(
-            "speed-of-light accounting requires ninfer_bench schema v16"
+            "speed-of-light accounting requires ninfer_bench schema v16 or v17"
         )
     if (
         report["load"]["architecture"]

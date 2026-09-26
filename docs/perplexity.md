@@ -55,6 +55,11 @@ joined by blank lines, 2,048-token windows). With the test split written to a fi
   --text wiki.test.joined.txt --context 2048 --disjoint --kv-dtype bf16
 ```
 
+Past the model's native window `--rope-yarn` applies YaRN at factor `--context` / native, and
+`--rope-yarn-factor F` at a fixed factor in `[1,4]` whatever the window is (default `1`, native
+RoPE). Neither changes the artifact or the default 4,096-token window; long-context extrapolation
+is not a quality guarantee, so keep the factor fixed while comparing other numerical settings.
+
 ## Metric
 
 For a stream `x[0..N)`, every token after `x[0]` is scored exactly once. A window `[b,e)` with target
@@ -86,5 +91,6 @@ are runtime results from the current artifact tokenizer and are recorded in each
 contain unrounded NLL/PPL values for every window, stream, domain, and the token-weighted overall
 aggregate.
 
-The schema-v2 report identifies the artifact's architecture, public name, actual weight formats
-and prefill signature alongside the workload and numerical results.
+The schema-v3 report identifies the artifact's architecture, public name, actual weight formats
+and prefill signature alongside the workload and numerical results; its execution configuration
+records `rope_yarn` and `rope_yarn_factor`.

@@ -11,6 +11,7 @@
 #include "models/qwen3_5/measurement.h"
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -71,6 +72,10 @@ void validate_options(const EngineOptions& options) {
     }
     if (options.media_preprocess_threads > 64) {
         throw std::invalid_argument("Engine media_preprocess_threads must be in [0,64]");
+    }
+    if (!std::isfinite(options.rope_yarn_factor) || options.rope_yarn_factor < 1.0F ||
+        options.rope_yarn_factor > 4.0F) {
+        throw std::invalid_argument("Engine rope_yarn_factor must be finite and in [1,4]");
     }
 }
 

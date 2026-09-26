@@ -1,4 +1,5 @@
 #include "ninfer_bench_support.h"
+#include "product/rope_yarn_options.h"
 #include "product/speculative_options.h"
 
 #include <algorithm>
@@ -307,6 +308,8 @@ std::string usage_text(std::string_view program) {
         << "  --warmup <n>                discarded repetitions (default: " << kDefaultWarmup
         << ")\n"
         << "  --max-ctx <tokens>          override auto-sized context capacity\n"
+        << "  --rope-yarn-factor <F>      YaRN at this fixed factor, 1..4, for every position "
+           "(default: 1, native RoPE)\n"
         << "  --prefill-chunk <tokens>    multiple of " << kPrefillChunkAlignment
         << " (default: " << kDefaultPrefillChunk << ")\n"
         << "  --kv-dtype <bf16|int8|fp8|rk8v4|rk4v4|rk4v4-e8|rk2v4-e8|nvfp4|k8v4>  KV cache storage "
@@ -372,6 +375,8 @@ BenchOptions parse_args(int argc, char** argv) {
             options.warmup = parse_nonnegative(value("--warmup"), "warmup");
         } else if (arg == "--max-ctx") {
             options.max_context = parse_u32(value("--max-ctx"), "max-ctx");
+        } else if (arg == "--rope-yarn-factor") {
+            options.rope_yarn_factor = product::parse_rope_yarn_factor(value("--rope-yarn-factor"));
         } else if (arg == "--prefill-chunk") {
             options.prefill_chunk = parse_u32(value("--prefill-chunk"), "prefill-chunk");
         } else if (arg == "--kv-dtype") {
@@ -637,7 +642,8 @@ std::string format_table(const BenchEnvironment& env, const std::vector<TestResu
         << format_bytes(env.memory.cuda_graph_allowance_bytes) << ", KV payload "
         << format_bytes(env.memory.kv_payload_bytes) << '\n'
         << "  corpus:     " << env.corpus_path << " (" << env.corpus_tokens << " tokens)\n"
-        << "  config:     max_context=" << env.max_context << " prefill_chunk=" << env.prefill_chunk
+        << "  config:     max_context=" << env.max_context
+        << " rope_yarn_factor=" << env.rope_yarn_factor << " prefill_chunk=" << env.prefill_chunk
         << " fast_prefill_kernel=" << (env.fast_prefill_kernel ? "on" : "off")
         << " kv_cache=" << kv_cache_name(env.kv_cache)
         << " spec=" << product::speculative_backend_name(env.speculative.backend)
@@ -760,6 +766,7 @@ std::string format_json(const BenchEnvironment& env, const std::string& command,
         << "  },\n"
         << "  \"config\": {\n"
         << "    \"max_context\": " << env.max_context << ",\n"
+        << "    \"rope_yarn_factor\": " << env.rope_yarn_factor << ",\n"
         << "    \"prefill_chunk\": " << env.prefill_chunk << ",\n"
         << "    \"fast_prefill_kernel\": " << (env.fast_prefill_kernel ? "true" : "false") << ",\n"
         << "    \"kv_cache\": \"" << kv_cache_name(env.kv_cache) << "\",\n"
@@ -846,7 +853,7 @@ std::string csv_field(std::string_view value) {
 std::string format_csv(const BenchEnvironment& env, const std::vector<TestResult>& results) {
     std::ostringstream out;
     out << "label,kind,n_prompt,n_gen,architecture,prefill_signature,model_name,artifact_path,max_"
-           "context,prefill_chunk,"
+           "context,rope_yarn_factor,prefill_chunk,"
            "speculative_"
            "backend,draft_tokens,ngram_draft_tokens,ngram_min_match,"
            "proposal_head,decode_path,kv_cache,kv_payload_bytes,load_host_to_device_bytes,"
@@ -874,7 +881,8 @@ std::string format_csv(const BenchEnvironment& env, const std::vector<TestResult
         out << result.test.label << ',' << kind_string(result.test.kind) << ','
             << result.test.n_prompt << ',' << result.test.n_gen << ',' << env.load.architecture
             << ',' << env.load.prefill_signature << ',' << csv_field(env.load.model_name) << ','
-            << csv_field(env.artifact_path) << ',' << env.max_context << ',' << env.prefill_chunk
+            << csv_field(env.artifact_path) << ',' << env.max_context << ','
+            << env.rope_yarn_factor << ',' << env.prefill_chunk
             << ',' << product::speculative_backend_name(env.speculative.backend) << ','
             << env.speculative.draft_tokens << ',' << env.speculative.ngram_draft_tokens << ','
             << env.speculative.ngram_min_match << ','

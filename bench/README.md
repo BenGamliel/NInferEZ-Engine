@@ -95,7 +95,11 @@ For a DFlash2 companion artifact:
 The benchmark disables context retention because every repetition is an independent root request.
 Schema v16 records `speculative_backend`, `draft_tokens`, `ngram_draft_tokens`, `ngram_min_match`,
 and the proposal head independently; JSON and CSV identify DFlash2 explicitly. MTP alone reserves
-its extra lookahead KV margin.
+its extra lookahead KV margin. Schema v17 adds `rope_yarn_factor`.
+
+`--rope-yarn-factor F` applies YaRN at a fixed factor in `[1,4]` to every position (default `1`,
+native RoPE). It does not change the context the workload or `--max-ctx` selects, nor the artifact,
+and long-context extrapolation is not a quality guarantee. Table, JSON and CSV reports record it.
 
 The [ngram copy proposer](../docs/ngram.md) runs alongside any selected neural backend, as the
 product does: `--ngram-draft-tokens` defaults to 15 with `--spec` (1..63, `--ngram-min-match
@@ -149,7 +153,7 @@ matching test, phase, and roof it reports the measured time change and the fract
 the pre-change gap to the roof that the change closed; a negative value moved the run
 away from the roof. A baseline already at or above a roof reports `n/a` for that roof's
 gap closure. Tests or phases present in only one run are listed as unmatched.
-The tool requires schema v16 and `--spec none`. It rejects speculative runs because proposals,
+The tool requires schema v16 or v17 and `--spec none`. It rejects speculative runs because proposals,
 verification, and acceptance make output tokens an invalid proxy for executed model work.
 
 Projection compute work is counted as `2 * matrix elements` for each executed text projection.
@@ -1195,7 +1199,7 @@ closed.
 
 Table, JSON, and CSV reports identify the architecture, model instance, artifact, Engine configuration,
 load summary, memory capacity, KV payload, workspace peak, phase throughput, and speculative
-statistics. JSON schema version 15 records the public value objects directly:
+statistics. JSON schema version 17 records the public value objects directly:
 
 - `load`: architecture, public name, actual formats, prefill signature, load/upload time,
   file/H2D/staging bytes and Device/Host object counts;

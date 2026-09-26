@@ -73,6 +73,7 @@ struct ServeOptions {
     bool mtp_experts_q4     = false;
     bool gdn_state_fp16     = false;
     bool rope_yarn          = false;
+    float rope_yarn_factor  = 1.0F;
     bool wddm_evictable_budget = false;
     bool mlp_a8_decode      = false;
     bool prefill_a8         = true;

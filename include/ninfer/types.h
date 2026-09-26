@@ -270,6 +270,10 @@ struct EngineOptions {
     // unscaled RoPE, or with rope_yarn the whole window takes Qwen's YaRN at factor
     // max_context / native (ops::RopeYarn).
     bool rope_yarn = false;
+    // A fixed YaRN factor in (1,4] for every position of the text and MTP layers, whatever
+    // max_context is: Qwen documents one factor per deployment rather than one per window. 1 leaves
+    // the choice to rope_yarn.
+    float rope_yarn_factor = 1.0F;
     // Reserves the grammar mask planes that JSON and JSON Schema constrained requests sample
     // through. Off, those requests are refused and a DFlash round carries no grammar stage.
     bool structured_output = false;

@@ -6,6 +6,7 @@
 #include "product/logging/logging.h"
 #include "product/logging/pretty_format.h"
 #include "product/logging/startup_log.h"
+#include "product/rope_yarn_options.h"
 
 #include <nlohmann/json.hpp>
 #include <spdlog/logger.h>
@@ -64,6 +65,7 @@ struct Options {
     bool mtp_experts_q4                 = false;
     bool gdn_state_fp16                 = false;
     bool rope_yarn                      = false;
+    float rope_yarn_factor              = 1.0F;
     bool mlp_a8_decode                  = false;
     bool prefill_a8                     = true;
     bool prefill_cublas                 = false;
@@ -78,7 +80,7 @@ std::string usage_text() {
            "       [--context N] [--stride N | --disjoint] [--device N]\n"
            "       [--kv-dtype bf16|int8|fp8|rk8v4|rk4v4|rk4v4-e8|rk2v4-e8|nvfp4|k8v4] [--output <directory>]\n"
            "       [--lm-head-q4|--lm-head-q6] [--embedding-q4|--embedding-q6] [--mtp-experts-q4] [--gdn-state-fp16]\n"
-           "       [--mlp-a8-decode] [--no-prefill-a8] [--rope-yarn]\n"
+           "       [--mlp-a8-decode] [--no-prefill-a8] [--rope-yarn] [--rope-yarn-factor F]\n"
            "       (--mlp-a8-decode is inert here: the route it enables is verify-phase"
            "        only, and scoring runs the prefill phase)\n"
            "       (--no-prefill-a8 is the opposite: scoring runs the prefill phase, so this is\n"
@@ -175,6 +177,9 @@ Options parse_options(int argc, char** argv) {
             out.gdn_state_fp16 = true;
         } else if (option == "--rope-yarn") {
             out.rope_yarn = true;
+        } else if (option == "--rope-yarn-factor") {
+            out.rope_yarn_factor =
+                ninfer::product::parse_rope_yarn_factor(value("--rope-yarn-factor"));
         } else if (option == "--mlp-a8-decode") {
             out.mlp_a8_decode = true;
         } else if (option == "--no-prefill-a8") {
@@ -306,6 +311,7 @@ int run(const Options& options, const std::shared_ptr<spdlog::logger>& logger,
     engine_options.mtp_experts_q4   = options.mtp_experts_q4;
     engine_options.gdn_state_fp16   = options.gdn_state_fp16;
     engine_options.rope_yarn        = options.rope_yarn;
+    engine_options.rope_yarn_factor = options.rope_yarn_factor;
     engine_options.mlp_a8_decode    = options.mlp_a8_decode;
     engine_options.prefill_a8       = options.prefill_a8;
     engine_options.prefill_cublas   = options.prefill_cublas;
@@ -466,7 +472,7 @@ int run(const Options& options, const std::shared_ptr<spdlog::logger>& logger,
     }
 
     json report{
-        {"schema_version", 2},
+        {"schema_version", 3},
         {"metric",
          {{"name", "fixed-window truncated-context causal perplexity"}, {"log_base", "natural"}}},
         {"artifact",
@@ -484,6 +490,8 @@ int run(const Options& options, const std::shared_ptr<spdlog::logger>& logger,
          {{"purpose", "causal_scoring"},
           {"device", options.device},
           {"context_tokens", options.context},
+          {"rope_yarn", options.rope_yarn},
+          {"rope_yarn_factor", options.rope_yarn_factor},
           {"fast_prefill_kernel", options.fast_prefill_kernel},
           {"stride_tokens", options.disjoint ? options.context : options.stride},
           {"windows", options.disjoint ? "disjoint" : "sliding"},

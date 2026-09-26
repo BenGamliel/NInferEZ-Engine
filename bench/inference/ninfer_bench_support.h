@@ -15,7 +15,7 @@
 
 namespace ninfer::bench {
 
-inline constexpr int kSchemaVersion                   = 16;
+inline constexpr int kSchemaVersion                   = 17;
 inline constexpr std::string_view kArtifactType       = "ninfer_bench_report";
 inline constexpr std::string_view kDefaultCorpusPath  = "bench/fixtures/bench_corpus.ids";
 inline constexpr int kDecodeSeedTokens                = 1;
@@ -60,6 +60,7 @@ struct BenchOptions {
     int repetitions = kDefaultRepetitions;
     int warmup      = kDefaultWarmup;
     std::optional<std::uint32_t> max_context;
+    float rope_yarn_factor      = 1.0F;
     bool fast_prefill_kernel    = false;
     std::uint32_t prefill_chunk = kDefaultPrefillChunk;
     KvCacheStorage kv_cache     = KvCacheStorage::BFloat16;
@@ -106,6 +107,7 @@ struct BenchEnvironment {
     MemorySummary memory;
 
     std::uint32_t max_context   = 0;
+    float rope_yarn_factor      = 1.0F;
     std::uint32_t prefill_chunk = kDefaultPrefillChunk;
     bool fast_prefill_kernel    = false;
     KvCacheStorage kv_cache     = KvCacheStorage::BFloat16;
