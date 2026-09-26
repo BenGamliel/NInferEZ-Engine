@@ -1,3 +1,4 @@
+#include "ops/linear/common/route_table.h"
 #include "ops/linear/linear_test_common.h"
 
 #include <array>
@@ -27,12 +28,31 @@ int q8_a16_conformance() {
     for (const auto& shape : kGeometries) {
         std::vector<Invocation> calls;
         // Cover live-column tails and the transitions from K-split to tiled contractions.
-        for (int t : {1,  2,  3,  4,  5,  7,  8,  9,  15,  16,  17,  23,  24,  25,
-                      31, 32, 33, 39, 40, 41, 44, 47, 48,  49,  55,  56,  57,  63,
-                      64, 65, 79, 80, 81, 95, 96, 97, 127, 128, 129, 159, 160,
-                      161, 191, 192, 193, 256, 1024}) {
+        for (int t : {1,  2,  3,  4,  5,   7,   8,   9,   15,  16,  17,  23,  24,  25,  31,  32,
+                      33, 39, 40, 41, 44,  47,  48,  49,  55,  56,  57,  63,  64,  65,  79,  80,
+                      81, 95, 96, 97, 127, 128, 129, 159, 160, 161, 191, 192, 193, 256, 1024}) {
             calls.push_back({t});
         }
+        // Route boundaries of the unified-template tables.
+        if (shape.n == 2048 && shape.k == 4096) {
+            for (int t : {895, 896, 897}) calls.push_back({t});
+        }
+        if (shape.n == 6144 && shape.k == 5120) {
+            for (int t : {191, 192, 193}) calls.push_back({t});
+        }
+        if (shape.k == 4608) {
+            for (int t : {6, 11, 12, 13, 14, 19, 20, 21, 27, 28, 29}) calls.push_back({t});
+            if (shape.n == 2048) {
+                for (int t : {870, 871, 872}) calls.push_back({t});
+            }
+            if (shape.n == 4608) {
+                for (int t : {255, 257}) calls.push_back({t});
+            }
+        }
+        if (shape.n == 9216 && shape.k == 2048) {
+            for (int t : {12, 13, 14}) calls.push_back({t});
+        }
+        if (shape.n == 248320) calls.push_back({34});
         if (shape.n == 2048 && shape.k == 16384) {
             for (int t : {383,  384,  385,  479,  480,  481,  639,  640,  641,  703,
                           704,  705,  959,  960,  961,  1343, 1344, 1345, 1679, 1680,
@@ -73,19 +93,18 @@ int q8_a16_conformance() {
 // one cannot tell a weight decode that rounds from one that does not: see ActivationSigns. The
 // widths are each table's tiled bands plus the K-split rung below the first of them, so a step at a
 // route boundary shows up as a step rather than as a single number.
-constexpr std::array kBiasedGeometries{
-    Geometry{4608, 4608, 307U},   Geometry{5120, 4608, 311U},  Geometry{5120, 6144, 313U},
-    Geometry{5120, 10240, 317U},  Geometry{5120, 17408, 331U}, Geometry{5120, 25600, 337U},
-    Geometry{6144, 5120, 347U},   Geometry{14336, 5120, 349U}, Geometry{34816, 5120, 353U},
-    Geometry{248320, 5120, 359U}};
+constexpr std::array kBiasedGeometries{Geometry{4608, 4608, 307U},  Geometry{5120, 4608, 311U},
+                                       Geometry{5120, 6144, 313U},  Geometry{5120, 10240, 317U},
+                                       Geometry{5120, 17408, 331U}, Geometry{5120, 25600, 337U},
+                                       Geometry{6144, 5120, 347U},  Geometry{14336, 5120, 349U},
+                                       Geometry{34816, 5120, 353U}, Geometry{248320, 5120, 359U}};
 
 int q8_a16_biased_activation() {
     int failures = 0;
     for (const auto& shape : kBiasedGeometries) {
         std::vector<Invocation> calls;
-        for (int t : {1,  8,   16,  24,  32,  40,  48,  49,  56,  64,
-                      65, 80,  96,  112, 128, 129, 160, 192, 193, 256,
-                      512, 1024}) {
+        for (int t : {1,  8,  16,  24,  32,  40,  48,  49,  56,  64,  65,
+                      80, 96, 112, 128, 129, 160, 192, 193, 256, 512, 1024}) {
             calls.push_back({t});
         }
         failures += run_shape("Q8_A16_biased", ActivationCompute::A16, make_q8_g32_fp16_weight,
@@ -102,8 +121,16 @@ int main() {
         return 77;
     }
     try {
-        const int failures = q8_a16_conformance() + q8_a16_biased_activation();
-        std::cout << (failures == 0 ? "OK" : "FAIL") << " Q8_A16 Linear\n";
+        using ninfer::ops::detail::LinearRouteTable;
+        int failures = 0;
+        for (const LinearRouteTable table : {LinearRouteTable::Legacy, LinearRouteTable::Unified}) {
+            ninfer::ops::detail::force_linear_route_table(table);
+            const int table_failures = q8_a16_conformance() + q8_a16_biased_activation();
+            std::cout << (table_failures == 0 ? "OK" : "FAIL") << " Q8_A16 Linear ("
+                      << (table == LinearRouteTable::Legacy ? "legacy" : "unified") << " routes)\n";
+            failures += table_failures;
+        }
+        ninfer::ops::detail::force_linear_route_table(std::nullopt);
         return failures == 0 ? 0 : 1;
     } catch (const std::exception& error) {
         std::cerr << "Q8_A16 Linear: " << error.what() << '\n';

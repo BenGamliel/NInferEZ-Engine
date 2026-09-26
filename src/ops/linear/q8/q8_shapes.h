@@ -44,4 +44,23 @@ using Q8N248320K5120 = Q8LinearGeometry<248320, 5120>;
 [[nodiscard]] Q8Launch select_q8_n34816_k5120(std::int32_t tokens);
 [[nodiscard]] Q8Launch select_q8_n248320_k5120(std::int32_t tokens);
 
+// Unified-template tables of the upstream shapes.
+[[nodiscard]] Q8Launch select_q8_n1024_k2048_unified(std::int32_t tokens);
+[[nodiscard]] Q8Launch select_q8_n1024_k5120_unified(std::int32_t tokens);
+[[nodiscard]] Q8Launch select_q8_n12288_k2048_unified(std::int32_t tokens);
+[[nodiscard]] Q8Launch select_q8_n14336_k5120_unified(std::int32_t tokens);
+[[nodiscard]] Q8Launch select_q8_n2048_k16384_unified(std::int32_t tokens);
+[[nodiscard]] Q8Launch select_q8_n2048_k4096_unified(std::int32_t tokens);
+[[nodiscard]] Q8Launch select_q8_n2048_k4608_unified(std::int32_t tokens);
+[[nodiscard]] Q8Launch select_q8_n248320_k5120_unified(std::int32_t tokens);
+[[nodiscard]] Q8Launch select_q8_n34816_k5120_unified(std::int32_t tokens);
+[[nodiscard]] Q8Launch select_q8_n4608_k4608_unified(std::int32_t tokens);
+[[nodiscard]] Q8Launch select_q8_n5120_k10240_unified(std::int32_t tokens);
+[[nodiscard]] Q8Launch select_q8_n5120_k17408_unified(std::int32_t tokens);
+[[nodiscard]] Q8Launch select_q8_n5120_k25600_unified(std::int32_t tokens);
+[[nodiscard]] Q8Launch select_q8_n5120_k4608_unified(std::int32_t tokens);
+[[nodiscard]] Q8Launch select_q8_n5120_k6144_unified(std::int32_t tokens);
+[[nodiscard]] Q8Launch select_q8_n6144_k5120_unified(std::int32_t tokens);
+[[nodiscard]] Q8Launch select_q8_n9216_k2048_unified(std::int32_t tokens);
+
 } // namespace ninfer::ops::detail
