@@ -704,6 +704,16 @@ int main() {
     } catch (const std::invalid_argument&) { hybrid_without_reuse_rejected = true; }
     failures += check(hybrid_without_reuse_rejected,
                       "hybrid prefix cache was accepted together with --no-prefix-reuse");
+    failures += check(parse({"ninfer-serve", "model.ninfer", "--use-original-prefix-caching",
+                             "--host-kv-mib", "64"})
+                              .context_cache.mode == ninfer::ContextCacheMode::Legacy,
+                      "--use-original-prefix-caching did not keep the checkpoint catalog");
+    bool both_caches_rejected = false;
+    try {
+        (void)parse({"ninfer-serve", "model.ninfer", "--use-original-prefix-caching",
+                     "--use-alt-prefix-caching"});
+    } catch (const std::invalid_argument&) { both_caches_rejected = true; }
+    failures += check(both_caches_rejected, "both prefix caching systems were accepted together");
     bool hybrid_pipeline_rejected = false;
     try {
         (void)parse(
@@ -874,6 +884,9 @@ int main() {
                                         "--assistant-prefill",
                                         "--auto-long-anchors",
                                         "--auto-prefix-grid",
+                                        "--cache-tap-ladder",
+                                        "--cache-tap-min-gap",
+                                        "--cache-taps-per-request",
                                         "--chat-template",
                                         "--concurrent-prefill",
                                         "--context-cache-policy",
@@ -886,6 +899,7 @@ int main() {
                                         "--device",
                                         "--device-profile",
                                         "--device-profile-path",
+                                        "--device-snapshot-slots",
                                         "--device-state-slots",
                                         "--devices",
                                         "--disk-kv-directstorage",
@@ -947,6 +961,7 @@ int main() {
                                         "--port",
                                         "--prefill-chunk",
                                         "--prefill-cublas",
+                                        "--prefix-cache-file",
                                         "--presence-penalty",
                                         "--preserve-thinking",
                                         "--recency-eviction",
@@ -968,6 +983,8 @@ int main() {
                                         "--top-p",
                                         "--unconstrained-response-format",
                                         "--usage-chunk-choice",
+                                        "--use-alt-prefix-caching",
+                                        "--use-original-prefix-caching",
                                         "--vision",
                                         "--vision-max-merged",
                                         "--vision-offload",

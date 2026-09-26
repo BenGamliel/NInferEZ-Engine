@@ -227,6 +227,8 @@ std::string serve_usage_text(const char* argv0) {
            "                                state snapshots; free VRAM becomes block cache\n"
            "                                and --host-cache-mib sizes the Host tier;\n"
            "                                excludes the catalog options above\n"
+           "  --use-original-prefix-caching the checkpoint catalog, which is the default;\n"
+           "                                accepted for command lines that name it\n"
            "  --device-snapshot-slots N     hybrid: device state snapshot slots (default\n"
            "                                concurrency + 1; + 2 without a Host tier)\n"
            "  --cache-taps-per-request N    hybrid: new prefill snapshots per request\n"
@@ -435,6 +437,7 @@ ServeOptions parse_serve_options(int argc, char** argv) {
     // Last flag seen that belongs to only one prefix-cache mode, for the cross-mode error.
     const char* legacy_cache_flag  = nullptr;
     const char* hybrid_option_flag = nullptr;
+    bool original_cache_selected   = false;
     if (argc >= 2 && (std::string(argv[1]) == "--help" || std::string(argv[1]) == "-h")) {
         options.help_requested = true;
         return options;
@@ -554,6 +557,8 @@ ServeOptions parse_serve_options(int argc, char** argv) {
             options.media_preprocess_threads = static_cast<std::uint32_t>(threads);
         } else if (arg == "--use-alt-prefix-caching") {
             options.context_cache.mode = ContextCacheMode::Hybrid;
+        } else if (arg == "--use-original-prefix-caching") {
+            original_cache_selected = true;
         } else if (arg == "--device-snapshot-slots") {
             options.context_cache.hybrid.device_snapshot_slots =
                 static_cast<std::uint32_t>(parse_nonnegative_int(
@@ -895,6 +900,11 @@ ServeOptions parse_serve_options(int argc, char** argv) {
         options.kv_capacity = options.context_cache.mode == ContextCacheMode::Hybrid
                                   ? KvCapacityPolicy::automatic()
                                   : KvCapacityPolicy::explicit_capacity(options.max_context);
+    }
+    if (original_cache_selected && options.context_cache.mode == ContextCacheMode::Hybrid) {
+        throw std::invalid_argument(
+            "--use-original-prefix-caching and --use-alt-prefix-caching select different prefix "
+            "caching systems");
     }
     if (options.context_cache.mode == ContextCacheMode::Hybrid) {
         if (legacy_cache_flag != nullptr) {
