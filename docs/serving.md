@@ -491,7 +491,11 @@ before the failure are kept, a call that cannot be read is returned as a call to
 text after it is dropped.
 
 Messages enter the selected template in their input order. The maintained Qwen templates keep
-system/developer messages at their original positions.
+system/developer messages at their original positions. With `--assistant-prefill` a final assistant
+message is an assistant prefill, as on `/v1/messages`: generation continues that turn in place
+instead of opening a new assistant turn after it. The prefill must be text only, and a prefill whose
+thinking is not explicitly disabled (top-level or `chat_template_kwargs` `enable_thinking`, or
+`reasoning_effort: "none"`) is refused with `assistant_prefill_not_supported`.
 
 Prompt-bearing JSON objects retain their received member order through request parsing and prompt
 rendering, including tool schemas and historical tool inputs. Canonical model-origin tool arguments
@@ -1023,7 +1027,8 @@ and Anthropic SSE. Consecutive User or Assistant messages are joined without add
 Mid-conversation System messages retain their input position. A final text-only Assistant message
 is an Assistant prefill: generation continues its existing text instead of opening another turn.
 Assistant prefill cannot contain media, Thinking, or tool calls and cannot start with Thinking
-enabled.
+enabled; Thinking left to the server default counts as enabled, so a prefill needs it disabled
+explicitly.
 
 `max_tokens` is optional for local clients and otherwise uses `--default-max-tokens`; a positive
 value is the complete output budget. `max_tokens:0` is rejected because NInfer does not expose a
@@ -1154,6 +1159,7 @@ The table lists executable defaults. The startup example selects a long-context 
 | `--webui-mcp-proxy` | relay the WebUI's MCP traffic at `/cors-proxy` (http targets, no API key) | off |
 | `--structured-output` | accept JSON and JSON Schema response formats (see [Structured output](#structured-output)) | off |
 | `--unconstrained-response-format` | without `--structured-output`, generate a JSON or JSON Schema request unconstrained instead of refusing it | off |
+| `--assistant-prefill` | continue a Chat Completions request's trailing assistant message in place, as `/v1/messages` does | off |
 | `--thinking-budget-message TEXT` | message a thinking-enabled request receives at its thinking budget instead of the built-in notice; the canonical `</think>` close is appended when missing | built-in |
 | `--default-reasoning-effort E` | effort for requests that name none: `none`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max` | unset |
 | `--vision` | enable media input and load Vision GPU allocations | off |

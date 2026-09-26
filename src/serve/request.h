@@ -51,6 +51,8 @@ struct RequestLimits {
     int default_max_tokens = 8192;
     // Accept top_logprobs for the first generated token (--first-token-logprobs).
     bool first_token_logprobs = false;
+    // Continue a trailing Chat Completions assistant message in place (--assistant-prefill).
+    bool assistant_prefill = false;
 };
 
 enum class ContentKind {

@@ -103,6 +103,9 @@ struct ServeOptions {
     // --unconstrained-response-format: without structured_output, generate a JSON or JSON Schema
     // request unconstrained instead of refusing it, for clients that always send a format.
     bool unconstrained_response_format = false;
+    // --assistant-prefill: a Chat Completions request whose last message is the assistant's
+    // continues that message in place, as /v1/messages always does.
+    bool assistant_prefill = false;
     // Accept Chat Completions top_logprobs and report the first generated token's log
     // probability with that many alternatives.
     bool first_token_logprobs = false;

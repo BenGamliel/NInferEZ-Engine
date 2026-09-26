@@ -104,7 +104,7 @@ std::string serve_usage_text(const char* argv0) {
            "[--ngram-session-mib N] [--ngram-native-sessions] "
            "[--no-thinking] [--preserve-thinking] [--cors] [--no-webui] [--webui-mcp-proxy] "
            "[--usage-chunk-choice] "
-           "[--structured-output|--unconstrained-response-format] "
+           "[--structured-output|--unconstrained-response-format] [--assistant-prefill] "
            "[--temperature F] [--top-p F] [--top-k N] [--min-p F] [--presence-penalty F] "
            "[--frequency-penalty F] [--seed N] [--greedy]\n"
            "       [--log-level trace|debug|info|warning|error|critical|off]\n"
@@ -194,7 +194,10 @@ std::string serve_usage_text(const char* argv0) {
            "the grammar masks and adds a grammar stage to every DFlash round.\n"
            "       --unconstrained-response-format, without --structured-output, generates a JSON "
            "or JSON Schema request unconstrained instead of refusing it with 400, for clients that "
-           "always send a response format\n";
+           "always send a response format\n"
+           "       --assistant-prefill continues a Chat Completions request's trailing assistant "
+           "message in place instead of opening a new assistant turn after it, as /v1/messages "
+           "does; such a request needs thinking disabled\n";
 }
 
 // "1,2,3" selects the ordered devices the model's pipeline stages run on; the first also holds the
@@ -592,6 +595,8 @@ ServeOptions parse_serve_options(int argc, char** argv) {
             options.structured_output = true;
         } else if (arg == "--unconstrained-response-format") {
             options.unconstrained_response_format = true;
+        } else if (arg == "--assistant-prefill") {
+            options.assistant_prefill = true;
         } else if (arg == "--usage-chunk-choice") {
             options.usage_chunk_choice = true;
         } else if (arg == "--temperature") {

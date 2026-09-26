@@ -162,8 +162,11 @@ ResolvedPromptSemantics resolve_prompt_semantics(const GenerationRequest& reques
         // the caller has not selected a reasoning mode or budget.
         if (!thinking && !effort && !request.thinking_budget) { thinking = false; }
     }
+    // Thinking resolves to enabled when neither the request nor the server says otherwise, as the
+    // family's templates treat an absent enable_thinking. A concrete value is what lets the
+    // assistant-prefill guard below refuse a prefill that would open a thinking turn.
     ResolvedPromptSemantics result{
-        .enable_thinking           = thinking ? thinking : server.enable_thinking,
+        .enable_thinking           = thinking ? thinking : server.enable_thinking.value_or(true),
         .preserve_thinking         = preserve ? preserve : server.preserve_thinking,
         .chat_template_kwargs_json = kwargs.dump(),
     };

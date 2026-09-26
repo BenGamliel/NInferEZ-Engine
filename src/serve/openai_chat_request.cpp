@@ -588,7 +588,7 @@ ChatTurn parse_message(const Json& item, std::size_t index) {
     return parse_regular_message(item, index, role);
 }
 
-void parse_messages(const Json& body, GenerationRequest& output) {
+void parse_messages(const Json& body, bool assistant_prefill, GenerationRequest& output) {
     if (!body.contains("messages")) { bad_request("missing required field: messages", "messages"); }
     const Json& messages = body.at("messages");
     if (!messages.is_array() || messages.empty()) {
@@ -597,6 +597,19 @@ void parse_messages(const Json& body, GenerationRequest& output) {
     output.messages.reserve(messages.size());
     for (std::size_t index = 0; index < messages.size(); ++index) {
         output.messages.push_back(parse_message(messages.at(index), index));
+    }
+    // A trailing assistant message is an assistant prefill, as on /v1/messages: the client sends
+    // back a partial assistant turn and the Engine continues it in place.
+    if (assistant_prefill && output.messages.back().role == ChatRole::Assistant) {
+        const ChatTurn& final = output.messages.back();
+        if (final.content.empty() || !final.reasoning_content.empty() ||
+            !final.tool_calls.empty() ||
+            std::any_of(final.content.begin(), final.content.end(),
+                        [](const ContentPart& part) { return part.kind != ContentKind::Text; })) {
+            bad_request("a final assistant prefill must contain only text", "messages",
+                        "assistant_prefill_not_supported");
+        }
+        output.continuation = ninfer::PromptContinuationMode::ContinueFinalAssistant;
     }
 }
 
@@ -991,7 +1004,7 @@ OpenAIChatRequest parse_chat_completion_request(const Json& body, const RequestL
     parse_tools(body, output.generation);
     parse_tool_choice(body, output.generation);
     parse_parallel_tool_calls(body, output.generation);
-    parse_messages(body, output.generation);
+    parse_messages(body, limits.assistant_prefill, output.generation);
     parse_stop(body, output.generation);
     parse_sampling(body, output.generation);
     if (const std::optional<int> top_logprobs = optional_int(body, "top_logprobs")) {

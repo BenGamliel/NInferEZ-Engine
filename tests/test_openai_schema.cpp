@@ -1155,6 +1155,56 @@ int test_common_objects() {
 
 } // namespace
 
+int test_assistant_continuation_mode() {
+    int failures = 0;
+    const Json trailing_assistant = Json{
+        {"model", "qwen"},
+        {"messages", Json::array({Json{{"role", "system"}, {"content", "system prompt"}},
+                                  Json{{"role", "user"}, {"content", "question"}},
+                                  Json{{"role", "assistant"}, {"content", "partial answer..."}}})}};
+    // Without --assistant-prefill a trailing assistant message is history, and a new turn opens.
+    failures += check(parse(trailing_assistant).generation.continuation ==
+                          ninfer::PromptContinuationMode::NewAssistantTurn,
+                      "a trailing assistant message became a prefill without --assistant-prefill");
+
+    RequestLimits prefill_limits    = limits();
+    prefill_limits.assistant_prefill = true;
+    const auto parse_prefill        = [&](const Json& body) {
+        return parse_chat_completion_request(body, prefill_limits);
+    };
+    Json ending_with_user = trailing_assistant;
+    ending_with_user["messages"].push_back(Json{{"role", "user"}, {"content", "follow-up"}});
+    failures += check(parse_prefill(ending_with_user).generation.continuation ==
+                          ninfer::PromptContinuationMode::NewAssistantTurn,
+                      "a conversation ending with a user message became a prefill");
+
+    // Thinking left to the server default resolves enabled, and a prefill cannot open a
+    // thinking turn, so only an explicit disable continues.
+    const auto continued = parse_prefill(trailing_assistant);
+    failures += check(continued.generation.continuation ==
+                          ninfer::PromptContinuationMode::ContinueFinalAssistant,
+                      "--assistant-prefill did not continue a trailing assistant message");
+    failures += check(api_error([&] { (void)semantics(continued.generation); }).code ==
+                          "assistant_prefill_not_supported",
+                      "a prefill with default thinking was not refused");
+    Json with_call = trailing_assistant;
+    with_call["messages"].back()["tool_calls"] = Json::array(
+        {Json{{"id", "call_1"},
+              {"type", "function"},
+              {"function", Json{{"name", "lookup"}, {"arguments", "{}"}}}}});
+    failures += check(api_error([&] { (void)parse_prefill(with_call); }).code ==
+                          "assistant_prefill_not_supported",
+                      "a prefill carrying a tool call was accepted");
+    Json no_thinking               = trailing_assistant;
+    no_thinking["enable_thinking"] = false;
+    const auto disabled            = parse_prefill(no_thinking);
+    failures += check(semantics(disabled.generation).enable_thinking == false &&
+                          prompt(disabled.generation).options.continuation ==
+                              ninfer::PromptContinuationMode::ContinueFinalAssistant,
+                      "a prefill with thinking disabled did not reach the prompt as a continuation");
+    return failures;
+}
+
 int main() {
     int failures = 0;
     failures += test_request_envelope_and_sampling();
@@ -1170,6 +1220,7 @@ int main() {
     failures += test_stream_response();
     failures += test_stream_observations();
     failures += test_common_objects();
+    failures += test_assistant_continuation_mode();
     if (failures == 0) { std::cout << "OpenAI Chat protocol tests passed\n"; }
     return failures == 0 ? 0 : 1;
 }
