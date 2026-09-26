@@ -571,16 +571,19 @@ void propose_batch_impl(DFlashBatchContext& state, qwen3_5::DFlashDecodeState& f
 auto dflash_decode_batch_body(DFlashBatchContext& state, std::int32_t batch_size, std::uint32_t k,
                               DFlashEnvelopes envelopes,
                               ops::CausalAttentionExecutionEnvelope target_envelope) {
+    target_envelope.wide_verification = state.ngram && k > 15;
     return [&state, batch_size, k, envelopes, target_envelope] {
         if (batch_size <= 0 || batch_size > static_cast<std::int32_t>(kMaximumConcurrency) ||
-            k == 0 || k > kDFlashDecodeMaximumDrafts) {
+            k == 0 || k > kDFlashVerifyMaximumDrafts) {
             throw std::logic_error("DFlash decode batch state is incomplete");
         }
-        qwen3_5::DFlashDecodeState& frame = state.frame;
-        const std::int32_t width          = static_cast<std::int32_t>(k) + 1;
-        CUDA_CHECK(cudaMemcpyAsync(frame.ingress.data, &state.host_ingress,
-                                   sizeof(qwen3_5::DFlashDecodeIngress), cudaMemcpyHostToDevice,
-                                   state.execution.device.stream));
+        auto frame               = state.frame.narrowed(k);
+        const std::int32_t width = static_cast<std::int32_t>(k) + 1;
+        const std::size_t ingress_bytes =
+            state.ngram ? sizeof(qwen3_5::DFlashDecodeIngress)
+                        : offsetof(qwen3_5::DFlashDecodeIngress, ngram_tokens);
+        CUDA_CHECK(cudaMemcpyAsync(frame.ingress.data, &state.host_ingress, ingress_bytes,
+                                   cudaMemcpyHostToDevice, state.execution.device.stream));
 
         Tensor anchors            = frame.anchors.slice(0, 0, batch_size);
         Tensor frontiers          = frame.execution_frontiers.slice(0, 0, batch_size);
@@ -609,14 +612,57 @@ auto dflash_decode_batch_body(DFlashBatchContext& state, std::int32_t batch_size
         state.execution.work.reset();
         Tensor compact_features = state.execution.work.alloc(
             DType::BF16, {dimension(state.execution.parameters.draft->feature_projection.weight.k),
-                          width, batch_size});
+                          frame.append_positions.ne[0], batch_size});
         ops::prepare_ragged_prefix(dflash_state(state).pending_features, active_lanes,
                                    context_starts, frontiers, compact_features, append_positions,
                                    append_counts, state.execution.device.stream);
         append_context_impl(state, compact_features, append_positions, append_counts,
-                            state_destinations, dflash_rows, envelopes.append);
+                            state_destinations, dflash_rows,
+                            {0, static_cast<std::uint32_t>(frame.append_positions.ne[0])});
 
-        propose_batch_impl(state, frame, batch_size, k, envelopes);
+        const auto proposal_k = state.neural_proposal_drafts;
+        if (proposal_k == 0 || proposal_k > kDFlashDecodeMaximumDrafts || proposal_k > k ||
+            (!state.ngram && proposal_k != k)) {
+            throw std::logic_error("neural proposal is outside its supported frame");
+        }
+        // A neural round verifies at the drafter's own width. A batch>1 ngram round also runs the
+        // drafter, at the round's wider width: its leading proposal_k drafts are unchanged under a
+        // wider causal proposal, and rows without a copy verify only those (their extent).
+        if (!state.ngram || batch_size > 1) {
+            propose_batch_impl(state, frame, batch_size, k, envelopes);
+        }
+        if (state.ngram) {
+            auto* ingress = static_cast<std::byte*>(frame.ingress.data);
+            // Per-row copy payload, column-major per row at the round's draft width (k), matching
+            // the frame's [k, batch] stride. Only rows flagged in copy_rows take it.
+            Tensor copy_rows(ingress + offsetof(qwen3_5::DFlashDecodeIngress, copy_rows),
+                             DType::I32, {batch_size});
+            Tensor copy_drafts(ingress + offsetof(qwen3_5::DFlashDecodeIngress, ngram_tokens),
+                               DType::I32, {static_cast<std::int32_t>(k), batch_size});
+            Tensor copy_candidates;
+            Tensor copy_q;
+            Tensor candidates;
+            Tensor proposal_q;
+            // DFlash keeps its deterministic-draft verifier and count publication contract.
+            // DFlash2 represents the same deterministic proposal as a one-hot sparse law.
+            if (state.execution.parameters.model.config().draft->dflash2.has_value()) {
+                if (!frame.candidate_ids.data || !frame.proposal_q.data) {
+                    throw std::logic_error("DFlash2 ngram requires a sparse acceptance frame");
+                }
+                const std::initializer_list<std::int32_t> sparse_shape{
+                    ops::kSparseSpeculativeCandidates, static_cast<std::int32_t>(k), batch_size};
+                copy_candidates =
+                    Tensor(ingress + offsetof(qwen3_5::DFlashDecodeIngress, ngram_candidates),
+                           DType::I32, sparse_shape);
+                copy_q     = Tensor(ingress + offsetof(qwen3_5::DFlashDecodeIngress, ngram_q),
+                                    DType::FP32, sparse_shape);
+                candidates = frame.candidate_ids.slice(2, 0, batch_size);
+                proposal_q = frame.proposal_q.slice(2, 0, batch_size);
+            }
+            ops::speculative_overlay_copy_proposals(copy_rows, copy_drafts, copy_candidates, copy_q,
+                                                    drafts, candidates, proposal_q,
+                                                    state.execution.device.stream);
+        }
         if (state.execution.io.structured) {
             state.execution.io.structured->enqueue_dflash(drafts, state.execution.device.stream);
         }

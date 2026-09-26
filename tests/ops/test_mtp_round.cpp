@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <iostream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -96,6 +97,32 @@ int run_case(int k, int proposal_k, const std::vector<std::int32_t>& accepted) {
                                 t_rope_positions, t_valid, proposal_k, max_context, nullptr);
     cuda_synchronize();
 
+    int invalid_failures = 0;
+    if (((k == 15 && proposal_k == 3) || (k == 5 && proposal_k == 5)) && batch == 1 &&
+        accepted[0] == k) {
+        for (const int invalid_limit : {-1, 0, 16}) {
+            bool rejected = false;
+            try {
+                ops::mtp_prepare_next_round(t_verify, t_anchors, t_accepted, t_frontiers, t_budgets,
+                                            t_licensed, t_rope_deltas, t_alignment, t_extents,
+                                            t_positions, t_rope_positions, t_valid, invalid_limit,
+                                            max_context, nullptr);
+            } catch (const std::invalid_argument&) { rejected = true; }
+            if (!rejected) { ++invalid_failures; }
+        }
+        for (const int invalid_width : {1, 65}) {
+            auto invalid  = t_verify;
+            invalid.ne[0] = invalid_width;
+            bool rejected = false;
+            try {
+                ops::mtp_prepare_next_round(invalid, t_anchors, t_accepted, t_frontiers, t_budgets,
+                                            t_licensed, t_rope_deltas, t_alignment, t_extents,
+                                            t_positions, t_rope_positions, t_valid, proposal_k,
+                                            max_context, nullptr);
+            } catch (const std::invalid_argument&) { rejected = true; }
+            if (!rejected) { ++invalid_failures; }
+        }
+    }
     const std::string label = "mtp next round K=" + std::to_string(k) +
                               " P=" + std::to_string(proposal_k) + " B=" + std::to_string(batch);
     int failures =
@@ -121,7 +148,7 @@ int run_case(int k, int proposal_k, const std::vector<std::int32_t>& accepted) {
     failures += d_positions.verify_guards((label + " position guards").c_str());
     failures += d_rope_positions.verify_guards((label + " rope position guards").c_str());
     failures += d_valid.verify_guards((label + " valid guards").c_str());
-    return failures;
+    return failures + invalid_failures;
 }
 
 } // namespace
@@ -137,6 +164,13 @@ int main() {
     failures += run_case(5, 5, {0, 2, 5});
     failures += run_case(15, 15, {0, 7, 15});
     failures += run_case(3, 15, {0, 2, 3});
+    // Copy rounds verify up to 63 drafts, and proposals stay at the neural window.
+    for (int k = 1; k <= 63; ++k) {
+        for (const int proposal_k : {1, 2, 3, 5, 8, 15}) {
+            for (int a = 0; a <= k; ++a) { failures += run_case(k, proposal_k, {a}); }
+            if (k <= 31) { failures += run_case(k, proposal_k, {0, k / 2, k, 0, 1, k, k / 2, k}); }
+        }
+    }
 
     if (failures != 0) {
         std::cerr << "mtp_round failures=" << failures << '\n';

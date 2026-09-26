@@ -93,8 +93,18 @@ For a DFlash2 companion artifact:
 ```
 
 The benchmark disables context retention because every repetition is an independent root request.
-Schema v15 records `speculative_backend`, `draft_tokens`, and the proposal head independently;
-JSON and CSV identify DFlash2 explicitly. MTP alone reserves its extra lookahead KV margin.
+Schema v16 records `speculative_backend`, `draft_tokens`, `ngram_draft_tokens`, `ngram_min_match`,
+and the proposal head independently; JSON and CSV identify DFlash2 explicitly. MTP alone reserves
+its extra lookahead KV margin.
+
+The [ngram copy proposer](../docs/ngram.md) runs alongside any selected neural backend, as the
+product does: `--ngram-draft-tokens` defaults to 15 with `--spec` (1..63, `--ngram-min-match
+4..64`), and `--ngram-draft-tokens 0` measures the neural drafter alone, as reports older than
+this default did. Reports separate
+ngram rounds, drafted tokens and accepted tokens from aggregate speculative counters; JSON includes
+per-repetition values. A one-token `tg` seed is not a file-copy benchmark. Use a suitable
+repeated-token corpus with `-pg`, verify the output separately, and require positive ngram
+acceptance before attributing a speed change to copying.
 
 ### Inference speed-of-light estimate
 
@@ -139,7 +149,7 @@ matching test, phase, and roof it reports the measured time change and the fract
 the pre-change gap to the roof that the change closed; a negative value moved the run
 away from the roof. A baseline already at or above a roof reports `n/a` for that roof's
 gap closure. Tests or phases present in only one run are listed as unmatched.
-The tool requires schema v15 and `--spec none`. It rejects speculative runs because proposals,
+The tool requires schema v16 and `--spec none`. It rejects speculative runs because proposals,
 verification, and acceptance make output tokens an invalid proxy for executed model work.
 
 Projection compute work is counted as `2 * matrix elements` for each executed text projection.
@@ -169,7 +179,6 @@ shape. These fractions are the concurrency-1, non-speculative baseline (the benc
 one request per repetition), so do not transfer them to a served configuration — higher
 concurrency, speculative decoding, or a different context length — without a matching
 benchmark run.
-
 ## Context-cost calibration
 
 `ninfer_context_cost_bench` measures the static coefficients used to compare context-cache
@@ -1193,7 +1202,8 @@ statistics. JSON schema version 15 records the public value objects directly:
 - `memory`: weights/sequence/unified-workspace arenas, the optional non-additive Vision layout,
   planned context, KV storage, CUDA Graph allowance, and KV payload;
 - each repetition's `timings`: prepare, Vision, prefill, decode, and total seconds;
-- each repetition's `speculative`: window, rounds, drafted/accepted tokens, fallbacks, and per-position
+- each repetition's `speculative`: window, rounds, drafted/accepted tokens, fallbacks,
+  separate ngram rounds/drafted/accepted tokens, and per-position
 acceptance.
 
 Each test reports `workspace_peak_bytes` from the planned phase markers, including CUDA Graph

@@ -27,6 +27,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <random>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -49,6 +50,7 @@ public:
     using CaptureOffer       = typename ModelContract::CaptureOffer;
     using PendingBatch       = typename ModelContract::PendingBatch;
     using PreparedPrompt     = typename ModelContract::PreparedPrompt;
+    using NgramArchive       = typename ModelContract::NgramArchive;
     using OutputSession      = typename ModelContract::OutputSession;
     using PublishedOutput    = typename ModelContract::PublishedOutput;
     using Request            = RequestRecord<ModelContract>;
@@ -87,6 +89,11 @@ public:
         if (options.context_cache.rolling_retention) { resources_.enable_rolling_retention(); }
         if (options.context_cache.release_diverged_checkpoints) {
             resources_.enable_diverged_checkpoint_release();
+        }
+        if (options.speculative.ngram_archive_bytes != 0) {
+            ngram_archive_ = std::make_unique<NgramArchive>(typename NgramArchive::Limits{
+                .session_bytes = options.speculative.ngram_session_bytes,
+                .total_bytes   = options.speculative.ngram_archive_bytes});
         }
         std::promise<void> startup;
         std::future<void> started = startup.get_future();
@@ -210,6 +217,11 @@ public:
 
         std::shared_ptr<Request> request;
         try {
+            if (ngram_archive_ && !options.ngram_session.key.empty()) {
+                std::random_device entropy;
+                options.execution.sampling.seed ^=
+                    (static_cast<std::uint64_t>(entropy()) << 32) ^ entropy();
+            }
             auto output = instance_.frontend.make_output_session(
                 prompt, options.stop, options.output, options.execution.thinking,
                 options.execution.structured_output);
@@ -441,8 +453,8 @@ private:
         record_program_timing(timing, measurement.exposed);
     }
 
-    void record_detail(std::uint64_t RuntimeHostWorkStats::*elapsed_member,
-                       std::uint64_t RuntimeHostWorkStats::*invocation_member,
+    void record_detail(std::uint64_t RuntimeHostWorkStats::* elapsed_member,
+                       std::uint64_t RuntimeHostWorkStats::* invocation_member,
                        Clock::time_point started) noexcept {
         RuntimeHostWorkStats& stats = cumulative_stats_.host_work;
         stats.*elapsed_member += elapsed_ns(started, Clock::now());
@@ -451,8 +463,8 @@ private:
 
     class DetailScope {
     public:
-        DetailScope(EngineCore& owner, std::uint64_t RuntimeHostWorkStats::*elapsed_member,
-                    std::uint64_t RuntimeHostWorkStats::*invocation_member,
+        DetailScope(EngineCore& owner, std::uint64_t RuntimeHostWorkStats::* elapsed_member,
+                    std::uint64_t RuntimeHostWorkStats::* invocation_member,
                     nvtx::Name range_name) noexcept
             : owner_(owner), elapsed_member_(elapsed_member), invocation_member_(invocation_member),
               started_(Clock::now()) {
@@ -469,8 +481,8 @@ private:
 
     private:
         EngineCore& owner_;
-        std::uint64_t RuntimeHostWorkStats::*elapsed_member_;
-        std::uint64_t RuntimeHostWorkStats::*invocation_member_;
+        std::uint64_t RuntimeHostWorkStats::* elapsed_member_;
+        std::uint64_t RuntimeHostWorkStats::* invocation_member_;
         Clock::time_point started_;
         std::optional<nvtx::ScopedRange> range_;
     };
@@ -827,6 +839,7 @@ private:
 
     void complete_error(const std::shared_ptr<Request>& request, std::exception_ptr error) {
         release_planning_state(request);
+        request->ngram_archive.reset();
         request->prompt      = {};
         request->model_state = EngineRequestState::ModelFinished;
         request->sequence.reset();
@@ -852,6 +865,9 @@ private:
                               const std::exception_ptr& error) noexcept {
         try { request->prompt = {}; } catch (...) {}
         try { request->base_plan.reset(); } catch (...) {}
+        try {
+            request->ngram_archive.reset();
+        } catch (...) {}
         try { request->model_state = EngineRequestState::ModelFinished; } catch (...) {}
         try { request->sequence.reset(); } catch (...) {}
         try { request->lane.reset(); } catch (...) {}
@@ -914,7 +930,27 @@ private:
         result.speculative             = std::move(request->speculative_stats);
         result.first_token_logprobs    = std::move(request->first_token_logprobs);
         result.thinking                = request->output.thinking_stats();
-        result.materialization         = request->materialization_diagnostics;
+        if (request->ngram_archive) {
+            result.ngram_archive.bound = true;
+            if (reason != FinishReason::Cancelled &&
+                !request->cancelled.load(std::memory_order_acquire)) {
+                result.ngram_archive.published =
+                    ngram_archive_->publish(std::move(request->ngram_archive),
+                                            result.generated_token_ids, result.reasoning_tokens);
+            } else {
+                request->ngram_archive.reset();
+            }
+        }
+        if (ngram_archive_) {
+            auto stats      = ngram_archive_->stats(request->options.ngram_session.key);
+            stats.bound     = result.ngram_archive.bound;
+            stats.published = result.ngram_archive.published;
+            if (!request->options.ngram_session.key.empty()) {
+                stats.sampling_seed = request->options.execution.sampling.seed;
+            }
+            result.ngram_archive = stats;
+        }
+        result.materialization = request->materialization_diagnostics;
         if (request->first_token) {
             result.timings.first_token_seconds =
                 request->prepare_seconds +
@@ -1683,6 +1719,11 @@ private:
             .started          = Clock::now(),
         };
 
+        if (ngram_archive_ && !request->ngram_admission_checked) {
+            request->ngram_admission_checked = true;
+            request->ngram_archive =
+                request->prompt.bind_ngram(*ngram_archive_, request->options.ngram_session);
+        }
         typename ResourceManagement::MaterializationReserveResult reserved;
         try {
             reserved = resources_.reserve_materialization(
@@ -2247,6 +2288,7 @@ private:
     const std::size_t max_outstanding_;
     const std::chrono::milliseconds pending_timeout_;
     ResourceManagement resources_;
+    std::unique_ptr<NgramArchive> ngram_archive_;
 
     mutable std::mutex execution_mutex_;
     mutable std::mutex queue_mutex_;

@@ -60,6 +60,7 @@ struct ServeOptions {
     std::vector<std::uint32_t> stage_layers;
     KvCacheStorage kv_cache                = KvCacheStorage::BFloat16;
     SpeculativeOptions speculative;
+    bool ngram_native_sessions = false;
     ContextCacheOptions context_cache;
     bool enable_vision      = false;
     VisionResidency vision_residency       = VisionResidency::Resident;

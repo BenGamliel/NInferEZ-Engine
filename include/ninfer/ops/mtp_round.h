@@ -21,13 +21,15 @@ namespace ninfer::ops {
  *       ar_rope_positions[b,s] = ar_positions[b,s]+rope_deltas[b];
  *       ar_valid_columns[b,s]  = (s+1 < next_extents[b]).
  *   K is the round's verification width and P = proposal_drafts the drafts the next round
- *   proposes; an adaptive round verifies fewer drafts than the window it proposes.
+ *   proposes. The two are independent: an adaptive round verifies fewer drafts than the window
+ *   it proposes, and an ngram copy round verifies more.
  *
  * Logical shapes / effects:
  *   verify_ids/alignment_ids are distinct contiguous I32 [K+1,B]. ar_positions,
  *   ar_rope_positions, and ar_valid_columns are I32 [B,max(P-1,1)] with contiguous rows and one
  *   shared step stride at least B; this permits an exact-B prefix of a fixed-capacity frame. All
- *   other tensors are contiguous I32 [B]. B>=1, 1<=K<=P<=15, 0<=accepted[b]<=K,
+ *   other tensors are contiguous I32 [B]. B>=1, 1<=K<=31 (up to 63 at B=1), 1<=P<=15,
+ *   0<=accepted[b]<=K,
  *   licensed_counts[b]=accepted[b]+1, updated_frontiers and remaining_budgets are non-negative,
  *   and max_context is positive. The Op writes every output slot, including safe invalid-tail
  *   values. Inputs remain unchanged. No workspace or other state is used.

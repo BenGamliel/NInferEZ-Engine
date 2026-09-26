@@ -823,8 +823,8 @@ runtime::ExecutionTiming ProgramImpl::resolve_pending_raw(
         needs_hidden_correction = needs_hidden_correction || partial_terminal;
     }
 
-    // One speculative round produced every pending row, and its frame and egress are laid out at
-    // the width it verified.
+    // One speculative round produced every pending row, and its frame, egress and records are
+    // laid out at the width it verified.
     const std::uint32_t verify_drafts = record_width - 1U;
     const auto tail_started           = Clock::now();
     try {
@@ -850,10 +850,10 @@ runtime::ExecutionTiming ProgramImpl::resolve_pending_raw(
                     continue;
                 }
                 const auto count = static_cast<std::int32_t>(accepted_tokens[row]);
-                Tensor ids =
-                    io.dflash_decode->licensed_tokens.slice(1, static_cast<std::int32_t>(row), 1)
-                        .slice(0, 0, count)
-                        .view({count});
+                Tensor ids       = io.dflash_decode->narrowed(verify_drafts)
+                                       .licensed_tokens.slice(1, static_cast<std::int32_t>(row), 1)
+                                       .slice(0, 0, count)
+                                       .view({count});
                 Tensor counts =
                     token_counts.slice(1, static_cast<std::int32_t>(lanes[row]), 1)
                         .view({dimension(parameters.model.resources().public_token_count)});
@@ -876,7 +876,7 @@ runtime::ExecutionTiming ProgramImpl::resolve_pending_raw(
                 selected     = frame.target_continuation_hidden.slice(1, 0, batch);
                 destinations = frame.state_destination_slots.slice(0, 0, batch);
             } else if (is_masked_draft_backend(speculative_backend) && io.dflash_decode) {
-                qwen3_5::DFlashDecodeState& frame = *io.dflash_decode;
+                const qwen3_5::DFlashDecodeState frame = io.dflash_decode->narrowed(verify_drafts);
                 selector_tensor                   = frame.proposal_extents.slice(0, 0, batch);
                 hidden                            = frame.target_hidden.slice(2, 0, batch);
                 selected     = frame.target_continuation_hidden.slice(1, 0, batch);

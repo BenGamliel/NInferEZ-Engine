@@ -74,7 +74,7 @@ auto mtp_decode_batch_body(MtpBatchContext& state, std::int32_t batch_size,
                            MtpCausalAttentionEnvelopes envelopes) {
     return [&state, batch_size, verify_window, draft_window, envelopes] {
         if (batch_size <= 0 || batch_size > static_cast<std::int32_t>(kMaximumConcurrency) ||
-            verify_window == 0 || draft_window < verify_window ||
+            verify_window == 0 || verify_window > kMtpVerifyMaximumDrafts || draft_window == 0 ||
             draft_window > kMtpDecodeMaximumDrafts ||
             state.frame.current_drafts.ne[0] != static_cast<std::int32_t>(verify_window)) {
             throw std::logic_error("MTP decode batch state is incomplete");

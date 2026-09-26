@@ -21,6 +21,7 @@
 #include "models/qwen3_5/execution/text.h"
 #include "models/qwen3_5/execution/vision.h"
 #include "models/qwen3_5/program/vision_prefill.h"
+#include "models/qwen3_5/program/ngram_proposer.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -411,7 +412,13 @@ struct SharedPrefixSlot {
 // Request/round control is not retained with a reusable SequenceState. A later concurrent Engine
 // gives every occupied request slot its own instance of this state.
 struct RequestControl {
-    Lifecycle lifecycle = Lifecycle::Empty;
+    std::unique_ptr<NgramProposer> ngram;
+    std::shared_ptr<const NgramSnapshot> ngram_snapshot;
+    std::uint64_t ngram_copy_source = 0;
+    std::uint32_t ngram_copy_offset = 0;
+    std::size_t ngram_copy_ledger   = 0;
+    std::size_t ngram_indexed       = 0;
+    Lifecycle lifecycle             = Lifecycle::Empty;
     PendingCandidate pending;
     ops::SamplingConfig sampling_host;
     std::shared_ptr<text::GrammarState> grammar;
@@ -598,6 +605,14 @@ public:
     const std::uint32_t draft_window;
     const std::uint32_t lookup_ngram;
     const MtpDraftPolicy mtp_policy;
+    // Copy proposals verified alongside the neural drafter; zero disables them.
+    const std::uint32_t ngram_draft_window;
+    const std::uint32_t ngram_min_match;
+
+    // The widest round the decode frame verifies: the draft window, or the copy window when wider.
+    [[nodiscard]] std::uint32_t widest_verify_window() const noexcept {
+        return std::max(draft_window, ngram_draft_window);
+    }
     const SpeculativeBackend speculative_backend;
     const KvCacheStorage kv_storage;
     const ProposalHead proposal_head;
@@ -686,6 +701,7 @@ public:
     DecodeGraphFamily ordinary_graphs;
     DecodeGraphFamily mtp_graphs;
     DecodeGraphFamily dflash_graphs;
+    DecodeGraphFamily ngram_graphs;
 
     std::optional<PinnedHostBuffer> round_host;
     std::optional<PinnedHostBuffer> score_logprobs_host;
@@ -1308,6 +1324,13 @@ private:
                                        std::span<const std::uint32_t> counts);
     void validate_licensed_tokens(std::span<const TokenId> tokens) const;
     void mark_workspace_usage(std::size_t phase_bytes) noexcept;
+    [[nodiscard]] std::vector<NgramProposer::Match>
+    propose_ngram(std::span<const std::uint32_t> lanes,
+                  std::span<const runtime::RoundBudget> budgets);
+    [[nodiscard]] NgramProposer::Match propose_ngram_one(std::uint32_t lane,
+                                                         const runtime::RoundBudget& budget);
+    static void record_ngram_round(RequestControl& request, const NgramProposer::Match& match,
+                                   std::uint32_t drafted, std::uint32_t accepted) noexcept;
     [[nodiscard]] runtime::BatchedGeneratedRound
     decode_ordinary_batch(std::span<const std::uint32_t> lanes,
                           std::span<const runtime::RoundBudget> budgets,

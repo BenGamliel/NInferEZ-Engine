@@ -22,6 +22,9 @@ struct CausalAttentionExecutionEnvelope {
     // launches over an INT8-G64 cache. Other routes and cache formats ignore it; it never changes
     // the route or workspace.
     bool fast_prompt_kernel = false;
+    // Opt into chunked single-row verification through width 64; ordinary prompts keep
+    // their existing route. Workspace planning and execution must use the same hint.
+    bool wide_verification = false;
 };
 
 struct ContextAttentionExecutionEnvelope {

@@ -100,6 +100,8 @@ std::string serve_usage_text(const char* argv0) {
            "[--gdn-state-fp16] [--rope-yarn] [--wddm-evictable-budget] "
            "[--mlp-a8-decode] [--no-prefill-a8] "
            "[--prefill-cublas [--no-prefill-cublas-projections]] [--lookup-ngram N] "
+           "[--ngram-draft-tokens N] [--ngram-min-match N] [--ngram-archive-mib N] "
+           "[--ngram-session-mib N] [--ngram-native-sessions] "
            "[--no-thinking] [--preserve-thinking] [--cors] [--no-webui] [--webui-mcp-proxy] "
            "[--usage-chunk-choice] "
            "[--structured-output] "
@@ -134,6 +136,15 @@ std::string serve_usage_text(const char* argv0) {
            "       --lookup-ngram N adds context-lookup drafting alongside --spec: the last N tokens "
            "are matched against the sequence so far and what followed is proposed; it is exact, and "
            "0 (the default) disables it\n"
+           "       --ngram-draft-tokens N copies up to N tokens (1..63) per round from earlier text of "
+           "the prompt, its tool results and the output that the last --ngram-min-match tokens "
+           "(4..64, default 12) match, verified by the target alongside --spec; on with 15 by "
+           "default whenever --spec is set, 0 disables it, and above 15 it requires "
+           "--max-concurrency 1\n"
+           "       --ngram-archive-mib N keeps the copy sources of finished requests in RAM for later "
+           "requests naming the same X-NInfer-Draft-Session (--ngram-session-mib per session, "
+           "default 128); --ngram-native-sessions also recognizes the session identities Kilo, "
+           "Codex and Claude send\n"
            "       --no-prefix-reuse disables compatible-prefix caching (enabled by default)\n"
            "       --fast-prefill-kernel prefills an int8 or rk* KV cache with the fast "
            "prompt-attention kernel (FP16 PV per 64-key tile) and rounds --prefill-chunk down to "
@@ -248,6 +259,7 @@ ServeOptions parse_serve_options(int argc, char** argv) {
     bool kv_capacity_explicit        = false;
     bool device_explicit             = false;
     bool context_capacity_explicit   = false;
+    bool ngram_width_explicit        = false;
     std::optional<std::size_t> kv_headroom_mib;
     if (argc >= 2 && (std::string(argv[1]) == "--help" || std::string(argv[1]) == "-h")) {
         options.help_requested = true;
@@ -442,6 +454,23 @@ ServeOptions parse_serve_options(int argc, char** argv) {
         } else if (arg == "--draft-tokens") {
             options.speculative.draft_tokens = static_cast<std::uint32_t>(
                 parse_nonnegative_int(require_value("--draft-tokens"), "draft-tokens"));
+        } else if (arg == "--ngram-draft-tokens") {
+            options.speculative.ngram_draft_tokens = static_cast<std::uint32_t>(
+                parse_nonnegative_int(require_value("--ngram-draft-tokens"), "ngram-draft-tokens"));
+            ngram_width_explicit = true;
+        } else if (arg == "--ngram-min-match") {
+            options.speculative.ngram_min_match = static_cast<std::uint32_t>(
+                parse_nonnegative_int(require_value("--ngram-min-match"), "ngram-min-match"));
+        } else if (arg == "--ngram-archive-mib" || arg == "--ngram-session-mib") {
+            const auto mib = parse_u64(require_value(arg.c_str()), arg.c_str());
+            if (mib > std::numeric_limits<std::size_t>::max() / (1ULL << 20)) {
+                throw std::invalid_argument("ngram archive capacity is out of range");
+            }
+            auto& bytes = arg == "--ngram-archive-mib" ? options.speculative.ngram_archive_bytes
+                                                       : options.speculative.ngram_session_bytes;
+            bytes       = static_cast<std::size_t>(mib << 20);
+        } else if (arg == "--ngram-native-sessions") {
+            options.ngram_native_sessions = true;
         } else if (arg == "--default-max-tokens") {
             options.default_max_tokens =
                 parse_nonnegative_int(require_value("--default-max-tokens"), "default-max-tokens");
@@ -639,6 +668,7 @@ ServeOptions parse_serve_options(int argc, char** argv) {
     if (options.prefill_chunk == 0 || options.prefill_chunk % 128 != 0) {
         throw std::invalid_argument("--prefill-chunk must be a positive multiple of 128");
     }
+    product::apply_default_ngram_draft_tokens(options.speculative, ngram_width_explicit);
     product::validate_speculative_cli_options(options.speculative);
     if (options.vision_residency == VisionResidency::Overlay && !options.enable_vision) {
         throw std::invalid_argument("--vision-residency overlay requires --vision");
@@ -650,6 +680,14 @@ ServeOptions parse_serve_options(int argc, char** argv) {
     if (options.cuda_graph_allowance_mib != 0 && !options.use_cuda_graph) {
         throw std::invalid_argument(
             "--cuda-graph-allowance-mib requires CUDA graphs (omit --no-cuda-graph)");
+    }
+    // The GDN conv-record workspace admits at most 16 verification columns when the batch holds
+    // more than one request, so a wider ngram proposal is admitted only for one active request.
+    if (options.speculative.ngram_draft_tokens > 15 && options.max_concurrency != 1) {
+        throw std::invalid_argument("--ngram-draft-tokens above 15 requires --max-concurrency 1");
+    }
+    if (options.ngram_native_sessions && options.speculative.ngram_archive_bytes == 0) {
+        throw std::invalid_argument("--ngram-native-sessions requires --ngram-archive-mib");
     }
     if (default_max_tokens_explicit) {
         if (options.default_max_tokens <= 0) {

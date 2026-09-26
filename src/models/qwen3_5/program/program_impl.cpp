@@ -148,6 +148,7 @@ ProgramImpl::ProgramImpl(const execution::Parameters& parameters_in, const Seque
       shared_prefix_capacity(plan.context_cache.max_shared_prefixes.value_or(0)),
       prefill_chunk(plan.prefill_chunk), fast_prefill_kernel(plan.fast_prefill_kernel),
       draft_window(plan.draft_window), lookup_ngram(plan.lookup_ngram), mtp_policy(plan.mtp_policy),
+      ngram_draft_window(plan.ngram_draft_window), ngram_min_match(plan.ngram_min_match),
       speculative_backend(plan.speculative_backend), kv_storage(plan.kv_storage),
       proposal_head(plan.proposal_head), rope_yarn(plan.rope_yarn),
       vision_enabled(plan.features.vision), use_cuda_graph(plan.use_cuda_graph),
@@ -463,7 +464,8 @@ ProgramImpl::ProgramImpl(const execution::Parameters& parameters_in, const Seque
     if (plan.persistent.grammar_masks) {
         structured_round = std::make_unique<qwen3_5::StructuredRound>(
             plan.persistent.grammar_masks->bind(backing),
-            parameters.model.resources().public_token_count, draft_window + 1, max_concurrency);
+            parameters.model.resources().public_token_count, widest_verify_window() + 1U,
+            max_concurrency);
         io.structured = structured_round.get();
     }
     active_continuations.fill(continuation_capacity);

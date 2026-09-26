@@ -158,9 +158,9 @@ def estimate(
 ) -> dict:
     if report.get("artifact_type") != "ninfer_bench_report":
         raise ValueError("input must be a ninfer_bench JSON report")
-    if report.get("schema_version") != 15:
+    if report.get("schema_version") != 16:
         raise ValueError(
-            "speed-of-light accounting requires ninfer_bench schema v15"
+            "speed-of-light accounting requires ninfer_bench schema v16"
         )
     if (
         report["load"]["architecture"]

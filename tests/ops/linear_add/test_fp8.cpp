@@ -90,11 +90,11 @@ int verify_preserved(const GuardedDeviceBuffer& device, std::span<const std::uin
     return 1;
 }
 
-int run_shape(std::int32_t n, std::int32_t k, std::int32_t first_a8, std::uint32_t seed) {
+int run_shape(std::int32_t n, std::int32_t k, std::int32_t first_a8, std::uint32_t seed,
+              bool wide_only) {
     std::vector<Invocation> invocations{
         Invocation{1, ops::LinearPolicy::A16Only},
         Invocation{2, ops::LinearPolicy::A16Only},
-        Invocation{26, ops::LinearPolicy::A16Only},
         Invocation{first_a8 - 1, ops::LinearPolicy::AllowA8},
         Invocation{first_a8, ops::LinearPolicy::AllowA8},
         Invocation{48, ops::LinearPolicy::AllowA8},
@@ -108,10 +108,11 @@ int run_shape(std::int32_t n, std::int32_t k, std::int32_t first_a8, std::uint32
         Invocation{128, ops::LinearPolicy::AllowA8},
         Invocation{129, ops::LinearPolicy::AllowA8},
     };
-    for (int columns = 2; columns <= 24; ++columns) {
+    if (wide_only) { invocations.clear(); }
+    for (int columns = wide_only ? 33 : 2; columns <= (wide_only ? 64 : 32); ++columns) {
         invocations.push_back({columns, ops::LinearPolicy::A16Only});
     }
-    constexpr std::int32_t kMaximumTokens = 1024;
+    const std::int32_t kMaximumTokens = wide_only ? 64 : 1024;
     quantized_weight::PackedWeight host_weight =
         quantized_weight::make_patterned_weight(QType::FP8_E4M3FN_ROW_BF16, n, k, seed);
     const std::vector<std::int32_t> rows = sampled_indices(n);
@@ -147,7 +148,8 @@ int run_shape(std::int32_t n, std::int32_t k, std::int32_t first_a8, std::uint32
             continue;
         }
 
-        if (invocation.tokens == 128) {
+        if (invocation.tokens == 128 || ((invocation.tokens == 32 || invocation.tokens == 64) &&
+                                         invocation.policy == ops::LinearPolicy::A16Only)) {
             cudaStream_t stream;
             cudaGraph_t graph;
             cudaGraphExec_t executable;
@@ -237,14 +239,19 @@ int run_shape(std::int32_t n, std::int32_t k, std::int32_t first_a8, std::uint32
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    const bool wide_only = argc == 2 && std::string_view(argv[1]) == "--wide-only";
+    if (argc != 1 && !wide_only) {
+        std::cerr << "usage: " << argv[0] << " [--wide-only]\n";
+        return 2;
+    }
     if (ninfer::test::cuda_unavailable()) {
         std::cout << "SKIP: no usable CUDA device\n";
         return 77;
     }
     int failures = 0;
-    failures += run_shape(5120, 6144, 22, 861U);
-    failures += run_shape(5120, 17408, 25, 863U);
+    failures += run_shape(5120, 6144, 22, 861U, wide_only);
+    failures += run_shape(5120, 17408, 25, 863U, wide_only);
     std::cout << (failures == 0 ? "OK" : "FAIL") << " FP8 linear_add\n";
     return failures == 0 ? 0 : 1;
 }

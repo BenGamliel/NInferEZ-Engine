@@ -314,6 +314,15 @@ ProgramImpl::reserve_materialization(AdmissionCandidate&& plan, PreparedPromptDa
         if (prompt.has_media() && !request_plan.vision) { prompt.release_all_media_payloads(); }
 
         materialization_ledger_.assign(prompt.token_ids.begin(), prompt.token_ids.end());
+        if (ngram_draft_window != 0) {
+            request.ngram = std::make_unique<NgramProposer>();
+            request.ngram->set_boundaries(prompt.ngram_boundaries);
+            request.ngram->ingest(prompt.token_ids);
+            // Optional plain-text tool spans would otherwise be displaced by a large prompt.
+            for (const auto& source : prompt.ngram_sources) { request.ngram->ingest(source); }
+            request.ngram_indexed  = prompt.token_ids.size();
+            request.ngram_snapshot = std::move(prompt.ngram_snapshot);
+        }
         materialization_identity_.assign(prompt);
         materialization_prefix_digests_.assign(prompt);
 

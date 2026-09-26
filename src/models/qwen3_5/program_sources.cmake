@@ -1,5 +1,6 @@
 target_sources(ninfer_model_runtime PRIVATE
   qwen3_5/program/structured_round.cpp
+  "${CMAKE_CURRENT_LIST_DIR}/ngram.cpp"
   "${CMAKE_CURRENT_LIST_DIR}/measurement.cpp"
   "${CMAKE_CURRENT_LIST_DIR}/program/storage/draft_context.cpp"
   "${CMAKE_CURRENT_LIST_DIR}/state/decoder_state.cpp"

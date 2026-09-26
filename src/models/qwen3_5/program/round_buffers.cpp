@@ -42,6 +42,14 @@ void validate_spec(const RoundStateSpec& spec) {
         throw std::invalid_argument(
             "RoundState DFlash draft window exceeds the decode frame domain");
     }
+    if (spec.verify_window != 0 &&
+        (spec.backend == SpeculativeBackend::None || spec.verify_window < spec.draft_window ||
+         spec.verify_window > (spec.backend == SpeculativeBackend::Mtp
+                                   ? kMtpVerifyMaximumDrafts
+                                   : kDFlashVerifyMaximumDrafts))) {
+        throw std::invalid_argument(
+            "RoundState verify window must cover the draft window within the verify domain");
+    }
     if (spec.batch_capacity == 0 || spec.batch_capacity > kMaximumConcurrency) {
         throw std::invalid_argument("RoundState batch capacity must be in [1,8]");
     }
@@ -128,6 +136,12 @@ void complete_round_state_layout(LayoutBuilder& builder, RoundStateLayout& layou
                     "RoundState columns exceed int32");
     const std::int32_t drafts = checked_i32(std::max<std::uint64_t>(1ULL, layout.spec.draft_window),
                                             "RoundState drafts exceed int32");
+    // Decode rounds verify up to the verify window; prefill bridges and proposals stay at the
+    // draft window.
+    const std::int32_t verify_columns = checked_i32(
+        static_cast<std::uint64_t>(std::max(layout.spec.draft_window, layout.spec.verify_window)) +
+            1ULL,
+        "RoundState verify columns exceed int32");
     const auto i32            = [&](std::int32_t count, const char* label) {
         return add_tensor(builder, DType::I32, {count}, label);
     };
@@ -150,25 +164,26 @@ void complete_round_state_layout(LayoutBuilder& builder, RoundStateLayout& layou
         const auto batch =
             checked_i32(layout.spec.batch_capacity, "RoundState MTP batch capacity exceeds int32");
         decode.verify_ids =
-            add_tensor(builder, DType::I32, {columns, batch}, "MTP decode verify ids");
+            add_tensor(builder, DType::I32, {verify_columns, batch}, "MTP decode verify ids");
         decode.target_positions =
-            add_tensor(builder, DType::I32, {columns, batch}, "MTP decode target positions");
+            add_tensor(builder, DType::I32, {verify_columns, batch}, "MTP decode target positions");
         decode.target_argmax =
-            add_tensor(builder, DType::I32, {columns, batch}, "MTP decode target argmax");
+            add_tensor(builder, DType::I32, {verify_columns, batch}, "MTP decode target argmax");
         decode.target_logits =
-            add_tensor(builder, DType::BF16, {layout.spec.output_rows, columns, batch},
+            add_tensor(builder, DType::BF16, {layout.spec.output_rows, verify_columns, batch},
                        "MTP decode target logits");
-        decode.target_hidden = add_tensor(
-            builder, DType::BF16, {layout.spec.hidden, columns, batch}, "MTP decode target hidden");
+        decode.target_hidden =
+            add_tensor(builder, DType::BF16, {layout.spec.hidden, verify_columns, batch},
+                       "MTP decode target hidden");
         decode.target_continuation_hidden =
             add_tensor(builder, DType::BF16, {layout.spec.hidden, batch},
                        "MTP decode target continuation hidden");
         decode.proposal_logits = add_tensor(builder, DType::BF16, {layout.spec.output_rows, batch},
                                             "MTP decode proposal logits");
         decode.alignment_ids =
-            add_tensor(builder, DType::I32, {columns, batch}, "MTP decode alignment ids");
+            add_tensor(builder, DType::I32, {verify_columns, batch}, "MTP decode alignment ids");
         decode.alignment_hidden =
-            add_tensor(builder, DType::BF16, {layout.spec.hidden, columns, batch},
+            add_tensor(builder, DType::BF16, {layout.spec.hidden, verify_columns, batch},
                        "MTP decode alignment hidden");
         decode.ar_hidden = add_tensor(builder, DType::BF16, {layout.spec.hidden, batch},
                                       "MTP decode autoregressive hidden");
@@ -191,31 +206,32 @@ void complete_round_state_layout(LayoutBuilder& builder, RoundStateLayout& layou
         const auto batch = checked_i32(layout.spec.batch_capacity,
                                        "RoundState DFlash batch capacity exceeds int32");
         decode.proposal_ids =
-            add_tensor(builder, DType::I32, {columns, batch}, "DFlash proposal ids");
+            add_tensor(builder, DType::I32, {verify_columns, batch}, "DFlash proposal ids");
         decode.proposal_positions =
-            add_tensor(builder, DType::I32, {columns, batch}, "DFlash proposal positions");
-        decode.verify_positions =
-            add_tensor(builder, DType::I32, {columns, batch}, "target verify cache positions");
+            add_tensor(builder, DType::I32, {verify_columns, batch}, "DFlash proposal positions");
+        decode.verify_positions = add_tensor(builder, DType::I32, {verify_columns, batch},
+                                             "target verify cache positions");
         if (layout.spec.backend == SpeculativeBackend::DFlash2) {
-            decode.candidate_ids =
-                add_tensor(builder, DType::I32, {16, columns - 1, batch}, "DFlash2 candidate ids");
-            decode.proposal_q = add_tensor(builder, DType::FP32, {16, columns - 1, batch},
-                                           "DFlash2 sampled proposal q");
+            decode.candidate_ids = add_tensor(builder, DType::I32, {16, verify_columns - 1, batch},
+                                              "DFlash2 candidate ids");
+            decode.proposal_q    = add_tensor(builder, DType::FP32, {16, verify_columns - 1, batch},
+                                              "DFlash2 sampled proposal q");
         }
         decode.append_positions =
-            add_tensor(builder, DType::I32, {columns, batch}, "DFlash append positions");
+            add_tensor(builder, DType::I32, {verify_columns, batch}, "DFlash append positions");
         decode.append_counts = add_tensor(builder, DType::I32, {batch}, "DFlash append counts");
-        decode.draft_tokens =
-            add_tensor(builder, DType::I32, {columns - 1, batch}, "DFlash proposal draft tokens");
+        decode.draft_tokens  = add_tensor(builder, DType::I32, {verify_columns - 1, batch},
+                                          "DFlash proposal draft tokens");
         decode.verify_ids =
-            add_tensor(builder, DType::I32, {columns, batch}, "DFlash target verify ids");
+            add_tensor(builder, DType::I32, {verify_columns, batch}, "DFlash target verify ids");
         decode.target_argmax =
-            add_tensor(builder, DType::I32, {columns, batch}, "DFlash target argmax");
+            add_tensor(builder, DType::I32, {verify_columns, batch}, "DFlash target argmax");
         decode.target_logits =
-            add_tensor(builder, DType::BF16, {layout.spec.output_rows, columns, batch},
+            add_tensor(builder, DType::BF16, {layout.spec.output_rows, verify_columns, batch},
                        "DFlash target logits");
-        decode.target_hidden = add_tensor(
-            builder, DType::BF16, {layout.spec.hidden, columns, batch}, "DFlash target hidden");
+        decode.target_hidden =
+            add_tensor(builder, DType::BF16, {layout.spec.hidden, verify_columns, batch},
+                       "DFlash target hidden");
         decode.target_continuation_hidden = add_tensor(
             builder, DType::BF16, {layout.spec.hidden, batch}, "DFlash target continuation hidden");
     }
@@ -232,17 +248,21 @@ DFlashPrefillState::DFlashPrefillState(DeviceSpan backing, const DFlashPrefillSt
     : produced_count(layout.produced_count.bind(backing)) {}
 
 MtpDecodeState::MtpDecodeState(DeviceSpan backing, const MtpDecodeStateLayout& layout,
-                               std::uint32_t batch_capacity, std::uint32_t draft_window) {
+                               std::uint32_t batch_capacity, std::uint32_t draft_window,
+                               std::uint32_t verify_window) {
     if (batch_capacity == 0 || batch_capacity > kMaximumConcurrency || draft_window == 0 ||
-        draft_window > kMtpDecodeMaximumDrafts) {
+        draft_window > kMtpDecodeMaximumDrafts || verify_window < draft_window ||
+        verify_window > kMtpVerifyMaximumDrafts) {
         throw std::invalid_argument("MTP decode state dimensions are outside the supported domain");
     }
     static_assert(std::is_standard_layout_v<MtpDecodeIngress>);
     static_assert(std::is_standard_layout_v<MtpDecodeEgress>);
+    static_assert(offsetof(MtpDecodeIngress, sampling) % alignof(ops::SamplingConfig) == 0);
     const auto batch          = static_cast<std::int32_t>(batch_capacity);
-    const auto drafts         = static_cast<std::int32_t>(draft_window);
+    const auto drafts         = static_cast<std::int32_t>(verify_window);
     const auto width          = drafts + 1;
-    const auto steps          = std::max(drafts - 1, 1);
+    const auto neural_drafts  = static_cast<std::int32_t>(draft_window);
+    const auto steps          = std::max(neural_drafts - 1, 1);
     ingress                   = layout.ingress.bind(backing);
     egress                    = layout.egress.bind(backing);
     const auto ingress_tensor = [&](std::size_t offset, DType dtype,
@@ -285,7 +305,7 @@ MtpDecodeState::MtpDecodeState(DeviceSpan backing, const MtpDecodeStateLayout& l
     accepted_drafts =
         egress_tensor(offsetof(MtpDecodeEgress, accepted_drafts), DType::I32, {batch});
     next_drafts =
-        egress_tensor(offsetof(MtpDecodeEgress, next_drafts), DType::I32, {batch, drafts});
+        egress_tensor(offsetof(MtpDecodeEgress, next_drafts), DType::I32, {batch, neural_drafts});
     next_extents     = egress_tensor(offsetof(MtpDecodeEgress, next_extents), DType::I32, {batch});
     verify_ids       = layout.verify_ids.bind(backing);
     target_positions = layout.target_positions.bind(backing);
@@ -332,17 +352,49 @@ MtpDecodeState MtpDecodeState::verification_view(std::uint32_t verify_window) co
     return out;
 }
 
+DFlashDecodeState DFlashDecodeState::narrowed(std::uint32_t k) const {
+    if (k == 0 || k > static_cast<std::uint32_t>(draft_tokens.ne[0])) {
+        throw std::invalid_argument("DFlash narrowed view requires an allocated draft width");
+    }
+    if (k == static_cast<std::uint32_t>(draft_tokens.ne[0])) { return *this; }
+    auto result       = *this;
+    const auto width  = static_cast<std::int32_t>(k + 1);
+    const auto drafts = static_cast<std::int32_t>(k);
+    const auto rows   = draft_tokens.ne[1];
+    // Every round tensor below is written and consumed within one round, and every host index
+    // into ingress/egress uses the round's own width, so a dense [k+1,C] reinterpretation of the
+    // native storage is exact for any row count.
+    for (Tensor* tensor : {&result.target_rope_positions, &result.licensed_tokens,
+                           &result.proposal_ids, &result.proposal_positions,
+                           &result.verify_positions, &result.verify_ids, &result.target_argmax}) {
+        *tensor = Tensor(tensor->data, tensor->dtype, {width, rows});
+    }
+    result.draft_tokens = Tensor(draft_tokens.data, draft_tokens.dtype, {drafts, rows});
+    for (Tensor* tensor : {&result.target_hidden, &result.target_logits}) {
+        *tensor = Tensor(tensor->data, tensor->dtype, {tensor->ne[0], width, rows});
+    }
+    for (Tensor* tensor : {&result.candidate_ids, &result.proposal_q}) {
+        if (tensor->data) {
+            *tensor = Tensor(tensor->data, tensor->dtype,
+                             {ops::kSparseSpeculativeCandidates, drafts, rows});
+        }
+    }
+    // append_positions/append_counts keep the native width: the previous round's provider may
+    // require a wider context append, and pending_features is lane-owned at that width.
+    return result;
+}
+
 DFlashDecodeState::DFlashDecodeState(DeviceSpan backing, const DFlashDecodeStateLayout& layout,
-                                     std::uint32_t batch_capacity, std::uint32_t draft_window) {
-    if (batch_capacity == 0 || batch_capacity > kMaximumConcurrency || draft_window == 0 ||
-        draft_window > kDFlashDecodeMaximumDrafts) {
+                                     std::uint32_t batch_capacity, std::uint32_t verify_window) {
+    if (batch_capacity == 0 || batch_capacity > kMaximumConcurrency || verify_window == 0 ||
+        verify_window > kDFlashVerifyMaximumDrafts) {
         throw std::invalid_argument(
             "DFlash decode state dimensions are outside the supported domain");
     }
     static_assert(std::is_standard_layout_v<DFlashDecodeIngress>);
     static_assert(std::is_standard_layout_v<DFlashDecodeEgress>);
     const auto batch          = static_cast<std::int32_t>(batch_capacity);
-    const auto drafts         = static_cast<std::int32_t>(draft_window);
+    const auto drafts         = static_cast<std::int32_t>(verify_window);
     const auto width          = drafts + 1;
     ingress                   = layout.ingress.bind(backing);
     egress                    = layout.egress.bind(backing);
@@ -415,13 +467,15 @@ RoundState::RoundState(DeviceSpan backing, const RoundStateLayout& layout) {
     }
     if (layout.mtp) { mtp.emplace(backing, *layout.mtp); }
     if (layout.dflash_prefill) { dflash_prefill.emplace(backing, *layout.dflash_prefill); }
+    const std::uint32_t verify_window =
+        std::max(layout.spec.draft_window, layout.spec.verify_window);
     if (layout.mtp_decode) {
         mtp_decode.emplace(backing, *layout.mtp_decode, layout.spec.batch_capacity,
-                           layout.spec.draft_window);
+                           layout.spec.draft_window, verify_window);
     }
     if (layout.dflash_decode) {
         dflash_decode.emplace(backing, *layout.dflash_decode, layout.spec.batch_capacity,
-                              layout.spec.draft_window);
+                              verify_window);
     }
 }
 

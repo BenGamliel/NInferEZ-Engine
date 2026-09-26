@@ -28,7 +28,9 @@ void HttpServer::handle_chat_completions(const httplib::Request& req, httplib::R
         RequestLimits limits;
         limits.default_max_tokens   = options_.default_max_tokens;
         limits.first_token_logprobs = options_.first_token_logprobs;
-        request                     = parse_chat_completion_request(parse_json_body(req), limits);
+        const auto body                  = parse_json_body(req);
+        request                          = parse_chat_completion_request(body, limits);
+        request.generation.ngram_session = resolve_ngram_session(req, body, options_);
         if (request.model.empty()) {
             request.model = public_model_id_;
         } else {
@@ -95,6 +97,7 @@ void HttpServer::handle_chat_completions(const httplib::Request& req, httplib::R
         }
         lifecycle->done(outcome);
         try {
+            set_ngram_generation_header(res, outcome.metrics.ngram_archive);
             set_owned_json_content(res, make_chat_completion_response(identity, outcome),
                                    prepared.lifetime);
         } catch (const std::exception& exception) {
@@ -217,6 +220,10 @@ void HttpServer::handle_chat_completions(const httplib::Request& req, httplib::R
                 std::vector<std::string> terminal;
                 try {
                     terminal = encoder->finish(outcome);
+                    if (auto comment = ngram_generation_comment(outcome.metrics.ngram_archive);
+                        !comment.empty()) {
+                        terminal.insert(terminal.begin(), std::move(comment));
+                    }
                 } catch (const std::exception& exception) {
                     lifecycle->response_failure(make_internal_request_failure(
                         RequestFailurePhase::ResponseRender, exception.what()));

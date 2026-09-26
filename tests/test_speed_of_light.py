@@ -93,7 +93,7 @@ class SpeedOfLightTests(unittest.TestCase):
         artifact = fake_artifact(config)
         report = {
             "artifact_type": "ninfer_bench_report",
-            "schema_version": 15,
+            "schema_version": 16,
             "load": {"architecture": "Qwen3_5ForCausalLM", "name": "test"},
             "config": {"speculative_backend": "none"},
             "environment": {"gpu_name": "test gpu"},
@@ -175,7 +175,7 @@ class SpeedOfLightTests(unittest.TestCase):
         artifact = fake_artifact(config)
         report = {
             "artifact_type": "ninfer_bench_report",
-            "schema_version": 15,
+            "schema_version": 16,
             "load": {"architecture": "Qwen3_5ForCausalLM"},
             "config": {"speculative_backend": "mtp"},
         }

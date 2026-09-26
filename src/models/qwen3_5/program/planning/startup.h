@@ -96,6 +96,8 @@ struct SequencePlanningInputs {
     std::uint32_t draft_window              = 0;
     std::uint32_t lookup_ngram             = 0;
     MtpDraftPolicy mtp_policy               = MtpDraftPolicy::Fixed;
+    std::uint32_t ngram_draft_window        = 0;
+    std::uint32_t ngram_min_match           = 12;
     SpeculativeBackend speculative_backend  = SpeculativeBackend::None;
     KvCacheStorage kv_storage               = KvCacheStorage::BFloat16;
     ProposalHead proposal_head              = ProposalHead::Full;
@@ -125,6 +127,9 @@ struct SequencePlanImpl {
     std::uint32_t draft_window              = 0;
     std::uint32_t lookup_ngram             = 0;
     MtpDraftPolicy mtp_policy               = MtpDraftPolicy::Fixed;
+    // Copy proposals verified alongside the neural drafter; zero disables them.
+    std::uint32_t ngram_draft_window        = 0;
+    std::uint32_t ngram_min_match           = 12;
     SpeculativeBackend speculative_backend  = SpeculativeBackend::None;
     KvCacheStorage kv_storage               = KvCacheStorage::BFloat16;
     ProposalHead proposal_head              = ProposalHead::Full;
@@ -144,12 +149,17 @@ struct SequencePlanImpl {
     std::vector<std::size_t> extra_rank_reservation_bytes;
 };
 
+// The widest round a decode frame verifies: the draft window, or the copy window when wider.
+[[nodiscard]] inline std::uint32_t widest_verify_window(const SequencePlanImpl& plan) noexcept {
+    return std::max(plan.draft_window, plan.ngram_draft_window);
+}
+
 // The widest forward pass a pipeline stage boundary carries: prefill columns, or every lane's
 // verification columns. Sizes the boundary links and the scratch each stage needs around its layers.
 [[nodiscard]] inline std::uint64_t stage_boundary_columns(const SequencePlanImpl& plan) noexcept {
-    return std::max<std::uint64_t>(
-        std::min(plan.prefill_chunk, plan.capacity),
-        static_cast<std::uint64_t>(plan.max_concurrency) * (plan.draft_window + 1U));
+    return std::max<std::uint64_t>(std::min(plan.prefill_chunk, plan.capacity),
+                                   static_cast<std::uint64_t>(plan.max_concurrency) *
+                                       (widest_verify_window(plan) + 1U));
 }
 
 struct SequencePlannerImpl {

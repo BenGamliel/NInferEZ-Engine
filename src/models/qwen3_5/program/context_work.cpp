@@ -288,8 +288,11 @@ execution::MtpCausalAttentionEnvelopes mtp_causal_attention_envelopes(std::uint3
         return static_cast<std::uint32_t>(std::min<std::uint64_t>(capacity, value));
     };
     execution::MtpCausalAttentionEnvelopes out;
+    // Only a copy round verifies past 16 columns; the flag lets a single row keep the verify
+    // route through 64.
     out.target_verify = {1,
-                         visible(static_cast<std::uint64_t>(max_frontier) + verify_window + 1ULL)};
+                         visible(static_cast<std::uint64_t>(max_frontier) + verify_window + 1ULL),
+                         false, verify_window > 15};
     out.batch         = out.target_verify;
     for (std::uint32_t step = 0; step + 1 < draft_window; ++step) {
         out.ar[step] = {
@@ -304,13 +307,12 @@ execution::MtpCausalAttentionEnvelopes mtp_causal_attention_envelopes(std::uint3
     return mtp_causal_attention_envelopes(max_frontier, k, k, capacity);
 }
 
-execution::DFlashEnvelopes dflash_envelopes(std::uint32_t min_frontier, std::uint32_t max_frontier,
-                                            std::uint32_t k) {
+execution::DFlashEnvelopes dflash_envelopes(std::uint32_t min_frontier,
+                                            std::uint32_t max_frontier) {
     (void)min_frontier;
     return execution::DFlashEnvelopes{
-        .local  = {0, max_frontier},
-        .full   = {0, max_frontier},
-        .append = {0, k + 1},
+        .local = {0, max_frontier},
+        .full  = {0, max_frontier},
     };
 }
 

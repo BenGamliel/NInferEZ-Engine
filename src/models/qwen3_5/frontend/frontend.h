@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ninfer/types.h"
+#include "models/qwen3_5/ngram.h"
 #include "models/qwen3_5/frontend/output_session.h"
 #include "models/registry.h"
 #include "runtime/contract/request.h"
@@ -33,6 +34,10 @@ struct FrontendOptions {
     // preserves the built-in canonical control suffix; a message lacking the canonical
     // </think> close serialization gets it appended at startup.
     std::string thinking_budget_message;
+    // Derive proposal-only ngram sources from tool results, and bind requests to the
+    // cross-request archive.
+    bool ngram_sources_enabled = false;
+    bool ngram_archive_enabled = false;
 };
 
 struct FrontendResources;
@@ -54,6 +59,8 @@ public:
     [[nodiscard]] PromptSummary summary() const;
     [[nodiscard]] PromptPreparationStats preparation_stats() const noexcept;
     [[nodiscard]] explicit operator bool() const noexcept;
+    [[nodiscard]] std::unique_ptr<NgramArchive::Request> bind_ngram(NgramArchive& archive,
+                                                                    const NgramSessionHints& hints);
 
 private:
     explicit PreparedPrompt(std::unique_ptr<PreparedPromptData> data) noexcept;

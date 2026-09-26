@@ -150,7 +150,23 @@ EngineOptions normalize_engine_options(EngineOptions options) {
         throw std::invalid_argument("Engine max_concurrency must be in [1,8]");
     }
 
-    ContextCacheOptions& cache      = options.context_cache;
+    ContextCacheOptions& cache = options.context_cache;
+    if (options.speculative.ngram_archive_bytes != 0 &&
+        options.speculative.ngram_draft_tokens == 0) {
+        throw std::invalid_argument(
+            "the cross-request ngram archive requires ngram drafting; enable --ngram-draft-tokens");
+    }
+    if (options.speculative.ngram_archive_bytes != 0 &&
+        (options.speculative.ngram_session_bytes < (1ULL << 20) ||
+         options.speculative.ngram_session_bytes > options.speculative.ngram_archive_bytes)) {
+        throw std::invalid_argument("ngram session capacity must be between 1 MiB and the total "
+                                    "archive capacity");
+    }
+    // The GDN conv-record workspace admits at most 16 verification columns once a batch holds
+    // more than one request.
+    if (options.speculative.ngram_draft_tokens > 15 && options.max_concurrency != 1) {
+        throw std::invalid_argument("ngram draft widths above 15 require engine concurrency one");
+    }
     const std::uint32_t concurrency = options.max_concurrency;
     if (!cache.enabled) {
         if ((cache.device_state_slots && *cache.device_state_slots != 0) ||
@@ -211,15 +227,18 @@ ModelInstance::ModelInstance(std::unique_ptr<models::qwen3_5::Model> source,
                              const EngineOptions& options)
     : model(std::move(source)), parameters(*model),
       frontend(models::qwen3_5::make_frontend(
-          model->resources(), {.chat_template_path       = options.chat_template_path,
-                               .architecture             = model->config().text.architecture,
-                               .vision_enabled           = options.enable_vision,
-                               .max_context              = options.max_context,
-                               .media_cache_bytes        = options.media_cache_bytes,
-                               .media_live_bytes         = options.media_live_bytes,
-                               .media_preprocess_threads = options.media_preprocess_threads,
-                               .vision_max_merged_tokens = options.vision_max_merged_tokens,
-                               .thinking_budget_message  = options.thinking_budget_message})),
+          model->resources(),
+          {.chat_template_path       = options.chat_template_path,
+           .architecture             = model->config().text.architecture,
+           .vision_enabled           = options.enable_vision,
+           .max_context              = options.max_context,
+           .media_cache_bytes        = options.media_cache_bytes,
+           .media_live_bytes         = options.media_live_bytes,
+           .media_preprocess_threads = options.media_preprocess_threads,
+           .vision_max_merged_tokens = options.vision_max_merged_tokens,
+           .thinking_budget_message  = options.thinking_budget_message,
+           .ngram_sources_enabled    = options.speculative.ngram_draft_tokens != 0,
+           .ngram_archive_enabled    = options.speculative.ngram_archive_bytes != 0})),
       capacity(options.max_context) {}
 
 ModelInstance::~ModelInstance() = default;

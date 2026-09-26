@@ -143,6 +143,26 @@ int main() {
     failures +=
         expect_throw([&] { (void)records.layer(0, 1, spec.width + 1); }, "excess active width");
 
+    // An ngram copy round records up to 64 columns of one row; every narrower round packs its
+    // rows at its own width inside the same storage.
+    auto wide_spec  = spec;
+    wide_spec.width = 64;
+    ninfer::LayoutBuilder wide_builder;
+    const auto wide_layout = ninfer::plan_gdn_replay_records(wide_builder, wide_spec);
+    const auto wide_bytes  = wide_builder.finish(256);
+    auto wide_backing      = make_backing(wide_bytes);
+    const ninfer::GdnReplayRecords wide({wide_backing.get(), wide_bytes}, wide_layout);
+    for (int width = 1; width <= 64; ++width) {
+        const auto row = wide.layer(2, 1, width);
+        failures += expect_shape(row.conv, 256, width, 1, 1, "wide conv");
+        failures += expect_shape(row.key, 128, 2, width, 1, "wide key");
+        failures += expect_shape(row.value, 128, 6, width, 1, "wide value");
+        failures += expect_shape(row.gate, 2, 6, width, 1, "wide gate");
+        failures += expect(row.conv.is_contiguous() && row.key.is_contiguous() &&
+                               row.value.is_contiguous() && row.gate.is_contiguous(),
+                           "a wide round's record row is not packed");
+    }
+
     failures += expect_size(record_bytes({.layers          = 48,
                                           .record_capacity = 8,
                                           .width           = 6,

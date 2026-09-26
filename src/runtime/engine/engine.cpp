@@ -65,6 +65,7 @@ runtime::ResolvedRequestOptions resolve_request_options(const ModelSamplingDefau
     resolved.execution.first_token_top_logprobs = options.execution.first_token_top_logprobs;
     resolved.stop                              = std::move(options.stop);
     resolved.output                            = options.output;
+    resolved.ngram_session                      = std::move(options.ngram_session);
     return resolved;
 }
 

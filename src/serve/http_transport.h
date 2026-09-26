@@ -17,6 +17,12 @@
 
 namespace ninfer::serve {
 
+[[nodiscard]] NgramSessionHints resolve_ngram_session(const httplib::Request& request,
+                                                      const RequestJson& body,
+                                                      const ServeOptions& options);
+void set_ngram_generation_header(httplib::Response& response, const NgramArchiveStats& stats);
+[[nodiscard]] std::string ngram_generation_comment(const NgramArchiveStats& stats);
+
 class ClientDisconnected final : public std::exception {
 public:
     [[nodiscard]] const char* what() const noexcept override { return "client disconnected"; }

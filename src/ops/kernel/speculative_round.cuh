@@ -1,4 +1,5 @@
 #pragma once
+#include "ninfer/ops/speculative_round.h"
 
 // Implements: include/ninfer/ops/speculative_round.h
 // Match: contiguous request-major state and BF16 verification logits.
@@ -15,7 +16,6 @@
 
 namespace ninfer::ops {
 
-inline constexpr int kSparseSpeculativeCandidates = 16;
 
 __global__ void speculative_prepare_verify_inputs_kernel(const std::int32_t* anchors,
                                                          const std::int32_t* drafts,
@@ -35,6 +35,24 @@ __global__ void speculative_prepare_verify_inputs_kernel(const std::int32_t* anc
         if (positions != nullptr) {
             positions[off] = base_positions[row] + (j <= extent ? j : extent);
         }
+    }
+}
+
+// One block per row. Rows whose device flag is zero keep the proposal already in place.
+__global__ void speculative_overlay_copy_proposals_kernel(
+    const std::int32_t* copy_rows, const std::int32_t* copy_drafts,
+    const std::int32_t* copy_candidates, const float* copy_q, std::int32_t* drafts,
+    std::int32_t* candidates, float* proposal_q, std::int32_t k, std::int32_t slots) {
+    const int row = static_cast<int>(blockIdx.x);
+    if (copy_rows[row] == 0) { return; }
+    for (int j = threadIdx.x; j < k; j += blockDim.x) {
+        drafts[row * k + j] = copy_drafts[row * k + j];
+    }
+    if (candidates == nullptr) { return; }
+    const int plane = k * slots;
+    for (int i = threadIdx.x; i < plane; i += blockDim.x) {
+        candidates[row * plane + i] = copy_candidates[row * plane + i];
+        proposal_q[row * plane + i] = copy_q[row * plane + i];
     }
 }
 
@@ -156,8 +174,8 @@ __device__ __forceinline__ void speculative_sparse_warp_store(const int* drafts,
     if (!selection_is_finite) {
         // Same sentinel shape as the dense path: one licensed token, nothing accepted, the length
         // still advances by one so the caller's frontier stays consistent.
-        if (lane <= k) {
-            licensed_tokens[row * (k + 1) + lane] = lane == 0 ? kSamplerNonFiniteToken : 0;
+        for (int column = lane; column <= k; column += 32) {
+            licensed_tokens[row * (k + 1) + column] = column == 0 ? kSamplerNonFiniteToken : 0;
         }
         if (lane == 0) {
             licensed_counts[row] = 1;
@@ -167,10 +185,11 @@ __device__ __forceinline__ void speculative_sparse_warp_store(const int* drafts,
         }
         return;
     }
-    if (lane <= k)
-        licensed_tokens[row * (k + 1) + lane] = lane < accepted_count    ? drafts[row * k + lane]
-                                                : lane == accepted_count ? terminal
-                                                                         : 0;
+    // A copy round verifies up to 63 drafts, so the columns take several passes of the warp.
+    for (int column = lane; column <= k; column += 32)
+        licensed_tokens[row * (k + 1) + column] = column < accepted_count ? drafts[row * k + column]
+                                                  : column == accepted_count ? terminal
+                                                                             : 0;
     if (lane == 0) {
         licensed_counts[row] = accepted_count + 1;
         accepted[row]        = accepted_count;
@@ -187,24 +206,33 @@ __device__ __forceinline__ void speculative_sparse_warp_greedy(
     int* anchors, int* licensed_tokens, int* licensed_counts, int* accepted, int row, int extent,
     int k, int physical_rows) {
     const int lane = threadIdx.x & 31;
-    const bool reject =
-        lane < extent && target_tokens[row * (k + 1) + lane] != drafts[row * k + lane];
-    const unsigned mask = __ballot_sync(0xffffffffU, reject);
-    const int a         = mask ? __ffs(mask) - 1 : extent;
-    const int terminal  = target_tokens[row * (k + 1) + a];
-    // `a` and `terminal` are warp-uniform -- `a` comes from a ballot, `terminal` from a uniform
+    // A copy round verifies up to 63 drafts, so the columns take one ballot per 32. The first
+    // rejection wins, and `a` stays warp-uniform.
+    int a = extent;
+    for (int base = 0; base < k; base += 32) {
+        const int column = base + lane;
+        const bool reject =
+            column < extent && target_tokens[row * (k + 1) + column] != drafts[row * k + column];
+        const unsigned mask = __ballot_sync(0xffffffffU, reject);
+        if (mask) a = min(a, base + __ffs(mask) - 1);
+    }
+    const int terminal = target_tokens[row * (k + 1) + a];
+    // `a` and `terminal` are warp-uniform -- `a` comes from ballots, `terminal` from a uniform
     // load -- so every lane computes the same answer here. That is deliberate: the alternative is
     // computing it on one lane and shuffling, which costs more than the redundant load.
     const __nv_bfloat16* row_logits =
         logits + static_cast<std::int64_t>(row) * (k + 1) * physical_rows;
-    // One lane per column of the committed span, so the whole span costs a single ballot rather
-    // than the sequential loop the single-threaded routes need. `a <= extent <= k <= 15`, so the
-    // span always fits inside the warp.
-    const bool lane_is_non_finite =
-        lane <= a && !sampling_selected_logit_is_finite(
-                         row_logits, static_cast<std::int64_t>(lane) * physical_rows,
-                         target_tokens[row * (k + 1) + lane]);
-    const bool span_is_finite = __ballot_sync(0xffffffffU, lane_is_non_finite) == 0u;
+    // One lane per column of the committed span, so the span costs one ballot per 32 columns
+    // rather than the sequential loop the single-threaded routes need.
+    bool span_is_finite = true;
+    for (int base = 0; base <= a; base += 32) {
+        const int column = base + lane;
+        const bool lane_is_non_finite =
+            column <= a && !sampling_selected_logit_is_finite(
+                               row_logits, static_cast<std::int64_t>(column) * physical_rows,
+                               target_tokens[row * (k + 1) + column]);
+        if (__ballot_sync(0xffffffffU, lane_is_non_finite) != 0u) { span_is_finite = false; }
+    }
     speculative_sparse_warp_store(drafts, k, row, a, terminal, lengths, anchors, licensed_tokens,
                                   licensed_counts, accepted, span_is_finite);
 }
@@ -226,30 +254,36 @@ __device__ __forceinline__ void speculative_sparse_warp_accept(
     int* accepted, int physical_rows) {
     const int lane       = threadIdx.x & 31;
     const int old_length = lengths[row];
-    bool reject          = false;
-    if (lane < extent) {
-        const int d = drafts[row * k + lane];
-        if (greedy)
-            reject = workspace.dist_idx[sampling_dist_offset(lane, 0)] != d;
-        else {
-            const int support = workspace.dist_support[lane];
-            float pd          = 0.0f;
-            for (int j = 0; j < support; ++j) {
-                const int at = sampling_dist_offset(lane, j);
-                if (workspace.dist_idx[at] == d) {
-                    pd = workspace.dist_prob[at];
-                    break;
+    int a                = extent;
+    // Keep the same per-position RNG keys and one-warp residual CDF at every width.
+    for (int base = 0; base < k; base += 32) {
+        const int column = base + lane;
+        bool reject      = false;
+        if (column < extent) {
+            const int d = drafts[row * k + column];
+            if (greedy)
+                reject = workspace.dist_idx[sampling_dist_offset(column, 0)] != d;
+            else {
+                const int support = workspace.dist_support[column];
+                float pd          = 0.0f;
+                for (int j = 0; j < support; ++j) {
+                    const int at = sampling_dist_offset(column, j);
+                    if (workspace.dist_idx[at] == d) {
+                        pd = workspace.dist_prob[at];
+                        break;
+                    }
                 }
+                const int at = (row * k + column) * kSparseSpeculativeCandidates;
+                const float qd =
+                    speculative_sparse_probability(candidate_ids + at, proposal_q + at, d);
+                const float u = sampling_uniform(cfg.seed, old_length + column + 1,
+                                                 kSamplePurposeSpeculativeAccept, 0);
+                reject        = !(pd >= qd || u * qd < pd);
             }
-            const int at   = (row * k + lane) * kSparseSpeculativeCandidates;
-            const float qd = speculative_sparse_probability(candidate_ids + at, proposal_q + at, d);
-            const float u  = sampling_uniform(cfg.seed, old_length + lane + 1,
-                                              kSamplePurposeSpeculativeAccept, 0);
-            reject         = !(pd >= qd || u * qd < pd);
         }
+        const unsigned failures = __ballot_sync(0xffffffffU, reject);
+        if (failures) a = min(a, base + __ffs(failures) - 1);
     }
-    const unsigned failures = __ballot_sync(0xffffffffU, reject);
-    const int a             = failures ? __ffs(failures) - 1 : extent;
     int terminal;
     // Whether the commit is backed by a finite selection. Tracked as a bool, not as the weight
     // itself, because the greedy branch has no weight to carry: its producer writes only
@@ -267,15 +301,21 @@ __device__ __forceinline__ void speculative_sparse_warp_accept(
         terminal = workspace.dist_idx[sampling_dist_offset(a, 0)];
         const __nv_bfloat16* row_logits =
             logits + static_cast<std::int64_t>(row) * (k + 1) * physical_rows;
-        // The whole committed span, one lane per column, for the reason given at
-        // speculative_commit_span_is_finite: a matched column whose logits are all NaN matched by
-        // accident. The tokens come from dist_idx here rather than from target ids, because that
-        // is what this route's acceptance comparison above reads.
-        const bool lane_is_non_finite =
-            lane <= a && !sampling_selected_logit_is_finite(
-                             row_logits, static_cast<std::int64_t>(lane) * physical_rows,
-                             workspace.dist_idx[sampling_dist_offset(lane, 0)]);
-        terminal_is_finite = __ballot_sync(0xffffffffU, lane_is_non_finite) == 0u;
+        // The whole committed span, one lane per column and one ballot per 32 columns, for the
+        // reason given at speculative_commit_span_is_finite: a matched column whose logits are all
+        // NaN matched by accident. The tokens come from dist_idx here rather than from target ids,
+        // because that is what this route's acceptance comparison above reads.
+        terminal_is_finite = true;
+        for (int base = 0; base <= a; base += 32) {
+            const int column = base + lane;
+            const bool lane_is_non_finite =
+                column <= a && !sampling_selected_logit_is_finite(
+                                   row_logits, static_cast<std::int64_t>(column) * physical_rows,
+                                   workspace.dist_idx[sampling_dist_offset(column, 0)]);
+            if (__ballot_sync(0xffffffffU, lane_is_non_finite) != 0u) {
+                terminal_is_finite = false;
+            }
+        }
     } else {
         const int n  = workspace.dist_support[a];
         int token    = 0;
@@ -388,7 +428,10 @@ __launch_bounds__(kSamplerBlock) __global__ void speculative_accept_greedy_draft
     const int partial_blocks = div_up(token_domain, kSamplerPartialTileItems);
     const int group_count    = sampler_group_count(partial_blocks);
     // No-op when the scratch/group path owns this shape.
-    if (sampler_multiblock_ok(token_domain, cols, partial_blocks, group_count)) { return; }
+    if (sampler_multiblock_ok(token_domain, cols, partial_blocks, group_count,
+                              kSpeculativeSamplerMaxColumns)) {
+        return;
+    }
 
     if (tid == 0) {
         a_sh               = 0;

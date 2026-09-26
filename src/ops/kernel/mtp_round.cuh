@@ -1,7 +1,7 @@
 #pragma once
 
 // Implements: include/ninfer/ops/mtp_round.h
-// Match: request-major K=1..15 verification and proposal transition.
+// Match: request-major K=1..31 verification (up to 63 at B=1) and P=1..15 next proposals.
 
 #include <cstdint>
 

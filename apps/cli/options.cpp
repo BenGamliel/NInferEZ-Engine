@@ -146,7 +146,7 @@ std::string usage_text(const char* argv0) {
            "       [--device N] [--devices N,M,...] [--stage-layers A,B,...]\n"
            "       [--kv-dtype bf16|int8|fp8|rk8v4|rk4v4|rk4v4-e8|rk2v4-e8|nvfp4|k8v4]\n"
            "       [--spec mtp|dflash|dflash2 --draft-tokens N]\n"
-           "       [--lookup-ngram N]\n"
+           "       [--lookup-ngram N] [--ngram-draft-tokens 0..63] [--ngram-min-match 4..64]\n"
            "       [--lm-head-draft] [--lm-head-q4|--lm-head-q6] [--embedding-q4|--embedding-q6] [--mtp-experts-q4]\n"
            "       [--gdn-state-fp16] [--rope-yarn] [--wddm-evictable-budget]\n"
            "       [--mlp-a8-decode] [--no-prefill-a8]\n"
@@ -190,6 +190,10 @@ std::string usage_text(const char* argv0) {
            "--lookup-ngram N adds context-lookup drafting alongside --spec: the last N tokens are "
            "matched against the sequence so far and what followed is proposed. It is exact, and 0 "
            "(the default) disables it.\n"
+           "--ngram-draft-tokens N copies up to N tokens (1..63) per round from earlier text of the "
+           "prompt, its tool results and the output that the last --ngram-min-match tokens (4..64, "
+           "default 12) match, verified by the target alongside --spec. It is on with 15 by default "
+           "whenever --spec is set; 0 disables it.\n"
            "--kv-capacity auto leaves " +
            std::to_string(kDefaultKvCapacityHeadroomBytes / (1024ULL * 1024ULL)) +
            " MiB of sizing headroom.\n"
@@ -207,6 +211,7 @@ Options parse_options(int argc, char** argv) {
     options.artifact_path     = argv[1];
     bool kv_capacity_explicit = false;
     bool device_explicit      = false;
+    bool ngram_width_explicit = false;
     std::optional<std::size_t> kv_headroom_mib;
 
     for (int i = 2; i < argc; ++i) {
@@ -250,6 +255,12 @@ Options parse_options(int argc, char** argv) {
             options.speculative.backend = product::parse_speculative_backend(value(arg));
         } else if (arg == "--draft-tokens") {
             options.speculative.draft_tokens = parse_u32(value(arg), "draft-tokens");
+        } else if (arg == "--ngram-draft-tokens") {
+            options.speculative.ngram_draft_tokens =
+                parse_u32(value(arg), "ngram-draft-tokens", true);
+            ngram_width_explicit = true;
+        } else if (arg == "--ngram-min-match") {
+            options.speculative.ngram_min_match = parse_u32(value(arg), "ngram-min-match");
         } else if (arg == "--lm-head-draft") {
             options.speculative.proposal_head = ProposalHead::Optimized;
         } else if (arg == "--lm-head-q4") {
@@ -387,6 +398,7 @@ Options parse_options(int argc, char** argv) {
         options.kv_capacity.explicit_tokens < options.max_context) {
         throw std::invalid_argument("--kv-capacity must be at least --max-context");
     }
+    product::apply_default_ngram_draft_tokens(options.speculative, ngram_width_explicit);
     product::validate_speculative_cli_options(options.speculative);
     if (options.vision_residency == VisionResidency::Overlay && !options.enable_vision) {
         throw std::invalid_argument("--vision-residency overlay requires --vision");

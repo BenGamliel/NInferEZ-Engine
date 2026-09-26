@@ -1,5 +1,7 @@
 #include "ninfer/ops/speculative_round.h"
+#include "ops/common/sampling_workspace.h"
 #include "ops/launcher/speculative_round.h"
+#include "ninfer/types.h"
 
 #include <algorithm>
 #include <limits>
@@ -9,11 +11,21 @@
 namespace ninfer::ops {
 namespace {
 
-constexpr std::int32_t kSparseMaxDrafts    = 15;
-constexpr std::int32_t kSparseCandidates   = 16;
-constexpr std::int32_t kSparsePhysicalRows = 248320;
-constexpr std::int32_t kSparseTokenDomain  = 248077;
-constexpr std::int32_t kSparseMaxBatch     = 8;
+constexpr std::int32_t kSparseMaxDrafts        = 63;
+constexpr std::int32_t kSparseBatchedMaxDrafts = 31;
+constexpr std::int32_t kSparseCandidates       = 16;
+constexpr std::int32_t kSparsePhysicalRows     = 248320;
+constexpr std::int32_t kSparseTokenDomain      = 248077;
+constexpr std::int32_t kSparseMaxBatch         = 8;
+
+std::size_t speculative_workspace_row_bytes(std::int32_t token_domain, std::int32_t min_drafts,
+                                            std::int32_t max_drafts) {
+    if (min_drafts >= kSpeculativeSamplerMaxColumns) { return 0; }
+    return make_sampling_workspace_layout(token_domain,
+                                          std::min(max_drafts + 1, kSpeculativeSamplerMaxColumns),
+                                          kSpeculativeSamplerMaxColumns)
+        .bytes;
+}
 
 void require_contiguous_nonnull(const Tensor& t, const char* op, const char* name) {
     if (!t.is_contiguous()) {
@@ -76,7 +88,7 @@ std::size_t speculative_accept_greedy_drafts_workspace_capacity_bytes(std::int32
         throw std::invalid_argument("speculative accept workspace: invalid draft interval");
     }
     const std::size_t row_bytes =
-        sampling_workspace_capacity_bytes(token_domain, min_drafts + 1, max_drafts + 1);
+        speculative_workspace_row_bytes(token_domain, min_drafts, max_drafts);
     if (row_bytes != 0 &&
         static_cast<std::size_t>(max_batch) > std::numeric_limits<std::size_t>::max() / row_bytes) {
         throw std::overflow_error("speculative accept workspace capacity overflows size_t");
@@ -89,12 +101,12 @@ std::size_t speculative_accept_sparse_drafts_workspace_capacity_bytes(
     std::int32_t max_drafts, std::int32_t min_batch, std::int32_t max_batch) {
     if (token_domain != kSparseTokenDomain || min_drafts < 1 || max_drafts < min_drafts ||
         max_drafts > kSparseMaxDrafts || min_batch < 1 || max_batch < min_batch ||
-        max_batch > kSparseMaxBatch) {
+        max_batch > kSparseMaxBatch || (max_drafts > kSparseBatchedMaxDrafts && max_batch != 1)) {
         throw std::invalid_argument("sparse speculative accept workspace: unsupported profile");
     }
     if (envelope.all_rows_greedy_without_penalties) { return 0; }
     const std::size_t row_bytes =
-        sampling_workspace_capacity_bytes(token_domain, min_drafts + 1, max_drafts + 1);
+        speculative_workspace_row_bytes(token_domain, min_drafts, max_drafts);
     return row_bytes * static_cast<std::size_t>(max_batch);
 }
 
@@ -133,6 +145,39 @@ void speculative_prepare_verify_ids(const Tensor& anchors, const Tensor& drafts,
     require_matrix(verify_ids, DType::I32, k + 1, batch, op, "verify_ids");
     detail::speculative_prepare_verify_ids_launch(anchors, drafts, current_extents, verify_ids,
                                                   stream);
+}
+
+void speculative_overlay_copy_proposals(const Tensor& copy_rows, const Tensor& copy_drafts,
+                                        const Tensor& copy_candidates, const Tensor& copy_q,
+                                        Tensor& drafts, Tensor& candidates, Tensor& proposal_q,
+                                        cudaStream_t stream) {
+    constexpr const char* op = "speculative_overlay_copy_proposals";
+    const std::int32_t k     = drafts.ne[0];
+    const std::int32_t batch = drafts.ne[1];
+    if (k < 1 || batch < 1 || batch > static_cast<std::int32_t>(kMaximumConcurrency)) {
+        throw std::invalid_argument(
+            "speculative_overlay_copy_proposals: K must be >=1 and B must be in [1,8]");
+    }
+    require_vector(copy_rows, DType::I32, batch, op, "copy_rows");
+    require_matrix(copy_drafts, DType::I32, k, batch, op, "copy_drafts");
+    require_matrix(drafts, DType::I32, k, batch, op, "drafts");
+    const bool sparse = candidates.data != nullptr;
+    if (sparse != (proposal_q.data != nullptr) || sparse != (copy_candidates.data != nullptr) ||
+        sparse != (copy_q.data != nullptr)) {
+        throw std::invalid_argument(
+            "speculative_overlay_copy_proposals: sparse planes must be all present or all empty");
+    }
+    if (sparse) {
+        require_tensor3(copy_candidates, DType::I32, kSparseSpeculativeCandidates, k, batch, op,
+                        "copy_candidates");
+        require_tensor3(candidates, DType::I32, kSparseSpeculativeCandidates, k, batch, op,
+                        "candidates");
+        require_tensor3(copy_q, DType::FP32, kSparseSpeculativeCandidates, k, batch, op, "copy_q");
+        require_tensor3(proposal_q, DType::FP32, kSparseSpeculativeCandidates, k, batch, op,
+                        "proposal_q");
+    }
+    detail::speculative_overlay_copy_proposals_launch(
+        copy_rows, copy_drafts, copy_candidates, copy_q, drafts, candidates, proposal_q, stream);
 }
 
 void speculative_accept_greedy_drafts(const Tensor& target_tokens, const Tensor& logits,
@@ -190,11 +235,14 @@ void speculative_accept_sparse_drafts(
     }
     const std::int32_t k = drafts.ne[0];
     if (k < 1 || k > kSparseMaxDrafts)
-        throw std::invalid_argument("speculative_accept_sparse_drafts: K must be 1..15");
+        throw std::invalid_argument("speculative_accept_sparse_drafts: K must be 1..63");
     const std::int32_t columns = k + 1;
     const std::int32_t batch   = drafts.ne[1];
     if (batch < 1 || batch > kSparseMaxBatch) {
         throw std::invalid_argument("speculative_accept_sparse_drafts: B must be 1..8");
+    }
+    if (k > kSparseBatchedMaxDrafts && batch != 1) {
+        throw std::invalid_argument("speculative_accept_sparse_drafts: K>31 requires B=1");
     }
     require_matrix(target_tokens, DType::I32, columns, batch, op, "target_tokens");
     require_tensor3(logits, DType::BF16, kSparsePhysicalRows, columns, batch, op, "logits");

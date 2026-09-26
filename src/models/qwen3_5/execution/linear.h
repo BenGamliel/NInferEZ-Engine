@@ -16,12 +16,15 @@ inline void project(const Tensor& input, const LinearParameters& p, Tensor& outp
     ops::linear(x, p.weight, output, p.policy, workspace, stream);
 }
 
+// `wide_verification` keeps the neural path's residual activation precision in a wide
+// single-row copy verification (see residual_projection_policy).
 inline void project_add(const Tensor& input, const LinearParameters& p, Tensor& residual,
                         WorkspaceArena& workspace, cudaStream_t stream,
-                        InputBasis basis = InputBasis::Primal) {
+                        InputBasis basis = InputBasis::Primal, bool wide_verification = false) {
     auto scope     = workspace.scope();
     const Tensor x = rotated_input(input, p.hadamard_signs, workspace, stream, basis);
-    ops::linear_add(x, p.weight, residual, p.policy, workspace, stream);
+    ops::linear_add(x, p.weight, residual, residual_projection_policy(p, wide_verification),
+                    workspace, stream);
 }
 
 inline void project_swiglu(const Tensor& input, const LinearParameters& p, Tensor& output,

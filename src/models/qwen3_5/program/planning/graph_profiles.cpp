@@ -38,9 +38,7 @@ std::vector<GraphExecutionProfile> dflash_base_profiles(std::uint32_t capacity,
     for (const std::uint32_t visible_end : {128U, 512U, 2048U, 4096U, 8198U, 16390U, 32768U}) {
         add_target_boundary(visible_end);
     }
-    if (draft_window >= 6 && draft_window <= 15) {
-        add_target_boundary(draft_window <= 11 ? 512U : 1024U);
-    }
+    if (draft_window >= 6) { add_target_boundary(draft_window <= 11 ? 512U : 1024U); }
     std::sort(ends.begin(), ends.end());
     ends.erase(std::unique(ends.begin(), ends.end()), ends.end());
     return graph_profiles_through(max_frontier, ends);
@@ -52,21 +50,23 @@ bool verify_uses_chunked_small_t(std::uint32_t draft_window, std::uint32_t batch
     if (tokens <= 6) { return false; }
     if (batch_size > 1) { return true; }
     // At batch one the route only depends on the target while the width is inside the verify
-    // domain; past it causal_attention_resolve_route returns Prompt for every envelope. Without
-    // this line the mirror claims a target dependence the route does not have, which costs a
-    // second topology class at widths no verify path can request.
-    if (tokens > 16) { return false; }
+    // domain, which a copy round's wide flag extends from 16 to 64 columns; past it
+    // causal_attention_resolve_route returns Prompt for every envelope. Without this line the
+    // mirror claims a target dependence the route does not have, which costs a second topology
+    // class at widths no verify path can request.
+    if (tokens > 64) { return false; }
     const std::uint32_t prompt_visible_limit = tokens <= 12 ? 512U : 1024U;
     return max_visible_keys > prompt_visible_limit;
 }
 
 // The attention route family of a call of `columns` query columns whose visible keys end at
-// `target`, as the op resolves it.
+// `target`, as the op resolves it. Only a copy round runs past 16 columns, and it asks for the
+// wide verify route.
 int route_family(ops::AttentionHeadGeometry attention, KvCacheStorage storage,
                  std::uint32_t columns, std::uint32_t target) {
-    return ops::causal_softmax_attention_route_family(attention, storage,
-                                                      {1U, std::max(target, 1U)}, 1,
-                                                      static_cast<std::int32_t>(columns));
+    return ops::causal_softmax_attention_route_family(
+        attention, storage, {1U, std::max(target, 1U), false, columns > 16U}, 1,
+        static_cast<std::int32_t>(columns));
 }
 
 int verify_route_family(ops::AttentionHeadGeometry attention, KvCacheStorage storage,
@@ -117,7 +117,8 @@ std::vector<GraphExecutionProfile> mtp_graph_profiles(std::uint32_t capacity,
                                                       std::uint32_t draft_window,
                                                       ops::AttentionHeadGeometry attention,
                                                       KvCacheStorage storage) {
-    if (verify_window == 0 || draft_window < verify_window || capacity == 0) { return {}; }
+    // An adaptive round verifies fewer drafts than it proposes, and an ngram copy round more.
+    if (verify_window == 0 || draft_window == 0 || capacity == 0) { return {}; }
     // Bound the final AR window E+V+K at split-policy transitions until the grid reaches its cap.
     std::vector<std::uint32_t> ends;
     const auto add_shifted = [&](std::uint32_t visible_end, std::uint32_t offset) {
@@ -190,7 +191,8 @@ std::vector<GraphExecutionProfile> dflash_graph_profiles(SpeculativeBackend back
                                                          std::uint32_t capacity,
                                                          std::uint32_t draft_window,
                                                          std::uint32_t batch_size) {
-    if (capacity == 0 || draft_window == 0 || draft_window > 15) {
+    if (capacity == 0 || draft_window == 0 || draft_window > 63 ||
+        (draft_window > 15 && batch_size != 1)) {
         throw std::invalid_argument("invalid masked draft graph dimensions");
     }
     if (backend == SpeculativeBackend::DFlash2) {

@@ -23,6 +23,7 @@ namespace {
 constexpr std::int32_t kHeadDim                      = 256;
 constexpr float kExpectedScale                       = 0.0625f;
 constexpr std::int32_t kMaximumVerifyTokens          = 16;
+constexpr std::int32_t kMaximumSingleRowVerifyTokens = 64;
 constexpr std::int32_t kMaximumBatchSize             = 8;
 constexpr std::uint32_t kTwoChunkPromptVisibleKeys   = 512;
 constexpr std::uint32_t kThreeChunkPromptVisibleKeys = 1024;
@@ -340,7 +341,10 @@ namespace detail {
 CausalAttentionRoute causal_attention_resolve_route(std::int32_t q_heads, std::int32_t width,
                                                     std::int32_t batch_size, KvCacheStorage storage,
                                                     CausalAttentionExecutionEnvelope envelope) {
-    if (q_heads == 24 && width <= kMaximumVerifyTokens) {
+    const std::int32_t maximum_verify_tokens = batch_size == 1 && envelope.wide_verification
+                                                   ? kMaximumSingleRowVerifyTokens
+                                                   : kMaximumVerifyTokens;
+    if (q_heads == 24 && width <= maximum_verify_tokens) {
         if (batch_size == 1) {
             std::uint32_t prompt_limit = 0;
             switch (storage) {
@@ -376,7 +380,7 @@ CausalAttentionRoute causal_attention_resolve_route(std::int32_t q_heads, std::i
     if (batch_size > 1) return CausalAttentionRoute::ChunkedSmallT;
     const std::uint32_t prompt_visible_keys =
         width <= 12 ? kTwoChunkPromptVisibleKeys : kThreeChunkPromptVisibleKeys;
-    if (q_heads == 16 && width <= kMaximumVerifyTokens &&
+    if (q_heads == 16 && width <= maximum_verify_tokens &&
         envelope.max_visible_keys > prompt_visible_keys)
         return CausalAttentionRoute::ChunkedSmallT;
     return CausalAttentionRoute::Prompt;
@@ -502,9 +506,12 @@ std::size_t causal_softmax_attention_workspace_capacity_bytes(
         return maximum;
     };
 
-    std::size_t maximum = 0;
-    if (min_width <= kMaximumVerifyTokens) {
-        const std::int32_t last = std::min(max_width, kMaximumVerifyTokens);
+    std::size_t maximum                      = 0;
+    const std::int32_t maximum_verify_tokens = batch_size == 1 && envelope.wide_verification
+                                                   ? kMaximumSingleRowVerifyTokens
+                                                   : kMaximumVerifyTokens;
+    if (min_width <= maximum_verify_tokens) {
+        const std::int32_t last = std::min(max_width, maximum_verify_tokens);
         for (std::int32_t width = min_width; width <= last; ++width) {
             maximum = std::max(maximum, exact_capacity(width));
         }

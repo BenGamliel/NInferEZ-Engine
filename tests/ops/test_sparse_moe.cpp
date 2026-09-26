@@ -951,8 +951,10 @@ int run_profile(const CodecProfile& profile) {
                                   profile.routed_gate_up, profile.routed_down, tokens, tokens));
         // Decode starts with the exact top-8 boundary tie; multi-token cases cycle the tie,
         // high/low expert ids, and a different ordering of the same experts.
-        failures +=
-            fixture.run(tokens, index == 0 ? 1 : 0, profile.verify_graph_replay && index == 1);
+        failures += fixture.run(tokens, index == 0 ? 1 : 0,
+                                profile.verify_graph_replay &&
+                                    (tokens == 2 || tokens == 4 || tokens == 6 || tokens == 8 ||
+                                     tokens == 16 || tokens == 32 || tokens == 64));
     }
     const std::size_t interval = ops::sparse_moe_workspace_capacity_bytes(
         profile.routed_gate_up, profile.routed_down, 1, profile.token_cases.back());
@@ -966,7 +968,12 @@ int run_profile(const CodecProfile& profile) {
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    const bool wide_only = argc == 2 && std::string_view(argv[1]) == "--wide-only";
+    if (argc != 1 && !wide_only) {
+        std::cerr << "usage: " << argv[0] << " [--wide-only]\n";
+        return 2;
+    }
     if (cuda_unavailable()) {
         std::cout << "SKIP: no usable CUDA device\n";
         return 77;
@@ -975,32 +982,48 @@ int main() {
     // These are public-behavior cases, not route assertions. They exercise decode (T=1), the
     // Small-T supported-domain edges, each profile's first prefill T, the wide-prefill boundary,
     // and one call crossing the 4096-token internal slice without observing any private plan.
-    constexpr std::array<std::int32_t, 6> kQ4Q5Tokens{{1, 2, 46, 47, 768, 4097}};
-    constexpr std::array<std::int32_t, 5> kQ4Q6Tokens{{1, 2, 46, 47, 768}};
+    constexpr std::array<std::int32_t, 34> kQ4Q5Tokens{
+        {1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14, 15, 16,  17,
+         18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 768, 4097}};
+    constexpr std::array<std::int32_t, 33> kQ4Q6Tokens{
+        {1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14, 15, 16, 17,
+         18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 768}};
     // 4097 ends on a one-token slice, which is the only way a profile whose prefill starts at
     // twenty reaches the route's small-token branch.
-    constexpr std::array<std::int32_t, 6> kQ8Q8Tokens{{1, 2, 19, 20, 768, 4097}};
+    constexpr std::array<std::int32_t, 34> kQ8Q8Tokens{
+        {1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14, 15, 16,  17,
+         18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 768, 4097}};
     // NVFP4 walks both frontiers: its Small-T edge and first prefill T, where the activation stops
     // being represented, and then the prefill tile boundary and the internal slice. Its prefill
     // route is W4A4 on Blackwell tensor cores, so an sm_8x build walks decode and Small-T only.
 #if defined(NINFER_SM8X_COMPAT) && !defined(NINFER_SM120_NVFP4)
     constexpr std::array<std::int32_t, 3> kNvfp4Tokens{{1, 2, 12}};
+    constexpr bool kNvfp4Prefill = false;
 #else
     constexpr std::array<std::int32_t, 7> kNvfp4Tokens{{1, 2, 12, 13, 64, 768, 4097}};
+    constexpr bool kNvfp4Prefill = true;
 #endif
-    const std::array<CodecProfile, 4> profiles{{
+    // A copy round verifies up to 64 columns of one request.
+    constexpr std::array<std::int32_t, 7> kWideTokens{{32, 33, 46, 47, 48, 63, 64}};
+    std::array<CodecProfile, 4> profiles{{
         {"sparse_moe q4+q5 a16", QType::Q4_G64_FP16, QType::Q5_G64_FP16, QType::Q8_G32_FP16,
          &kSparseMoeA16Tolerance, nullptr, 0, kQ4Q5Tokens, true},
         {"sparse_moe q4+q6 a16", QType::Q4_G64_FP16, QType::Q6_G64_FP16, QType::Q8_G32_FP16,
-         &kSparseMoeA16Tolerance, nullptr, 0, kQ4Q6Tokens, false},
+         &kSparseMoeA16Tolerance, nullptr, 0, kQ4Q6Tokens, true},
         {"sparse_moe q8+q8 a16", QType::Q8_G32_FP16, QType::Q8_G32_FP16, QType::Q8_G32_FP16,
-         &kSparseMoeA16Tolerance, nullptr, 0, kQ8Q8Tokens, false},
+         &kSparseMoeA16Tolerance, nullptr, 0, kQ8Q8Tokens, true},
         {"sparse_moe nvfp4", QType::NVFP4, QType::NVFP4, QType::NVFP4, &kSparseMoeNvfp4Tolerance,
          &kSparseMoeA4Tolerance, 13, kNvfp4Tokens, true},
     }};
+    if (wide_only) {
+        for (CodecProfile& profile : profiles) { profile.token_cases = kWideTokens; }
+    }
 
     int failures = 0;
-    for (const CodecProfile& profile : profiles) { failures += run_profile(profile); }
+    for (const CodecProfile& profile : profiles) {
+        if (wide_only && profile.routed_gate_up == QType::NVFP4 && !kNvfp4Prefill) { continue; }
+        failures += run_profile(profile);
+    }
     std::cout << (failures == 0 ? "OK" : "FAIL") << " sparse_moe correctness\n";
     return failures == 0 ? 0 : 1;
 }

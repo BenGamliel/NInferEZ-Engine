@@ -53,9 +53,13 @@ void mtp_prepare_next_round(const Tensor& verify_ids, const Tensor& next_anchors
     constexpr const char* op = "mtp_prepare_next_round";
     const std::int32_t T     = verify_ids.ne[0];
     const std::int32_t batch = verify_ids.ne[1];
-    if (T < 2 || T > 16 || proposal_drafts < T - 1 || proposal_drafts > 15) {
-        throw std::invalid_argument(
-            "mtp_prepare_next_round: verification/proposal drafts must satisfy 1<=K<=P<=15");
+    // The verified width and the next proposal are independent: an adaptive MTP round verifies
+    // fewer drafts than it proposes, and an ngram copy round verifies more.
+    if (T < 2 || T > 64 || (T > 32 && batch != 1)) {
+        throw std::invalid_argument("mtp_prepare_next_round: T must be 2..32, or 33..64 at B=1");
+    }
+    if (proposal_drafts < 1 || proposal_drafts > 15) {
+        throw std::invalid_argument("mtp_prepare_next_round: proposal drafts must be in [1,15]");
     }
     if (batch < 1) { throw std::invalid_argument("mtp_prepare_next_round: B must be positive"); }
     if (max_context <= 0) {

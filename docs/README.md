@@ -10,6 +10,7 @@ run the CLI or HTTP server.
 | [RTX 3090 Linux build](rtx-3090-linux.md) | Docker and native Ubuntu builds for the `sm_86` applications |
 | [CLI](cli.md) | text, chat-history, image/video input, output streams, sampling, MTP, and common runtime options |
 | [HTTP serving](serving.md) | OpenAI Responses/Chat Completions, Anthropic Messages, state, streaming, token counting, authentication, and tool calls |
+| [Ngram copy proposals](ngram.md) | copy acceleration alongside MTP, DFlash or DFlash2, on by default with a drafter |
 | [Performance](performance.md) | RTX 5090 measurement coverage, per-model serving results, methodology, and publication rules |
 | [Weight conversion](weight-conversion.md) | official recipes, custom formats and sources, conversion methods, optional components and artifact output |
 | [GGUF block formats](gguf.md) | GGUF releases with a ggml type per tensor: the fifteen block formats, their products, serving and measurements |
