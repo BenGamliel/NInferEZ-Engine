@@ -12,7 +12,8 @@ namespace ninfer::models::qwen3_5::execution {
 
 namespace {
 
-// GGUF parts of different block types leave no packed parent; each row projects on its own.
+// A bank whose parts share no contiguous parent -- GGUF parts of different block types, or mixed
+// formats such as Q8 K/V beside BF16 Q/gate -- has no packed form; each row projects on its own.
 bool unpacked(const MtpProjectionParameters& parameters) {
     return parameters.rows && parameters.packed.weight.qdata == nullptr;
 }

@@ -271,8 +271,14 @@ public:
         out.input_norm          = tensor(w.layer.input_norm);
         out.post_attention_norm = tensor(w.layer.post_attention_norm);
         out.final_norm          = tensor(w.final_norm);
-        // GGUF parts of different block types have no packed parent; the rows below serve alone.
-        if (!gguf(inputs[0]) || ops::joins(inputs)) {
+        // A bank whose parts share no contiguous parent -- GGUF parts of different block types, or
+        // mixed formats such as Q8 K/V beside BF16 Q/gate -- has no packed form, and the dense
+        // rows below serve alone.
+        const bool packable = ops::joins(inputs);
+        if (!packable && model_.config().text.architecture != Architecture::Qwen3_5) {
+            throw std::invalid_argument("MTP attention weights share no contiguous parent");
+        }
+        if (packable) {
             out.projection.packed = ops::prepare_linear_weight(inputs);
         }
         if (model_.config().text.architecture == Architecture::Qwen3_5) {
