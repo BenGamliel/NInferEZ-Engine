@@ -62,7 +62,7 @@ private:
 
 // Dry-run counterpart of WorkspaceArena. Target allocation helpers can run against this builder
 // and the real arena, including identical nested scope lifetimes, without maintaining byte
-// formulas. LayoutBuilder owns its cursor, alignment checks, and peak accounting.
+// formulas. Cursor, alignment checks, and peak accounting delegate to the LayoutBuilder member.
 class WorkspaceLayoutBuilder {
 public:
     using Scope = LayoutBuilder::Scope;

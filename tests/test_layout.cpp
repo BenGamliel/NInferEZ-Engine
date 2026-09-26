@@ -77,6 +77,15 @@ void test_workspace_boundaries() {
     (void)layout.alloc_bytes(1, 1);
     expect(layout.peak_bytes(1) == 4, "failed allocation must not consume alignment padding");
 
+    ninfer::WorkspaceLayoutBuilder tensor_path;
+    (void)tensor_path.alloc_bytes(std::numeric_limits<std::size_t>::max() - 14, 1);
+    expect_throws<std::overflow_error>(
+        [&] { (void)tensor_path.alloc(ninfer::DType::BF16, {2, 2}, 8); },
+        "tensor allocation end overflow must fail");
+    (void)tensor_path.alloc_bytes(1, 1);
+    expect(tensor_path.peak_bytes(1) == std::numeric_limits<std::size_t>::max() - 13,
+           "failed tensor allocation must not consume alignment padding");
+
     ninfer::WorkspaceLayoutBuilder maximum;
     (void)maximum.alloc_bytes(std::numeric_limits<std::size_t>::max(), 1);
     expect(maximum.peak_bytes(1) == std::numeric_limits<std::size_t>::max(),
