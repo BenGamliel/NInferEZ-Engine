@@ -475,10 +475,17 @@ Tool calls are read in the Qwen form (`<tool_call>` around `<function=NAME>` wit
 `<invoke name="NAME">` and `<param name="NAME">`, bare or inside a `<function_calls>` container.
 Every opening tag must be closed by its own kind.
 
+String values keep tool-call markup and balanced nested parameter tags as text. The format has no
+escape, so a closing parameter tag inside a value is read by what follows it: ordinary text makes it
+value text, while `<` or the end of the output, after optional whitespace, makes it the end of the
+value. A value therefore cannot contain a closing parameter tag followed by markup, nor an unmatched
+nested parameter opener; either makes the call malformed.
+
 Generated prose can quote tool-call markup before the real call. Unless the first marker's region
 opens with a complete call, each marker is tried in order, and the first complete region that
 consumes the rest of the response becomes the structured turn; quoted markup before it stays
-ordinary content. A region that opens a function but does not parse is recovered: complete calls
+ordinary content. At most sixteen markers are tried, the first one included, so an output that keeps
+repeating the marker costs a bounded amount of parsing. A region that opens a function but does not parse is recovered: complete calls
 before the failure are kept, a call that cannot be read is returned as a call to the reserved
 `malformed_tool_call` tool, whose arguments tell the model what went wrong so that it retries, and
 text after it is dropped.

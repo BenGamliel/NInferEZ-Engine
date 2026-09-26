@@ -30,6 +30,9 @@ constexpr std::string_view kFunctionCallsClose = "</function_calls>";
 // answers with an unknown-tool error and nothing runs; the arguments tell the model what went wrong.
 constexpr std::string_view kMalformedCallTool = "malformed_tool_call";
 
+// Markers tried as the start of the structured turn, the first one included.
+constexpr std::size_t kMaxMarkerAttempts = 16;
+
 struct RawParameter {
     std::string_view name;
     std::string_view value;
@@ -700,6 +703,15 @@ private:
         return false;
     }
 
+    // The format has no escape, so a value that quotes its own closing tag is ambiguous. A closer
+    // that runs on into ordinary text is value text; one followed, after whitespace, by markup or
+    // by the end of the output ends the value. A malformed tag after a real closer is still
+    // markup, so it is reported rather than folded into the value.
+    bool ends_value(std::size_t pos) const {
+        skip_format_whitespace(text_, pos);
+        return pos == text_.size() || text_[pos] == '<';
+    }
+
     bool find_parameter_close(std::size_t value_begin, const TagForm& form,
                               std::size_t& value_end) const {
         std::size_t depth = 1;
@@ -715,7 +727,7 @@ private:
                 continue;
             }
 
-            --depth;
+            if (depth != 1 || ends_value(close + form.close.size())) { --depth; }
             if (depth == 0) {
                 value_end = close;
                 return true;
@@ -941,14 +953,17 @@ ParsedToolCallOutput parse_qwen_tool_call_output(const std::string& text,
 
     // Generated prose can quote a tool-call marker before the real turn. Try each marker in order
     // and accept the first region that consumes the response to its end; earlier markers stay
-    // ordinary content.
+    // ordinary content. Every attempt can scan to the end of the output, so an output that keeps
+    // repeating the marker is tried only up to a bound. The bound counts from the first marker,
+    // not the last, so no call of a multi-call turn is ever left behind as text.
     const std::string_view source(text);
     const std::size_t first = candidate;
     std::vector<RawToolCall> raw_calls;
     std::size_t accepted         = std::string::npos;
     FallbackReason first_failure = FallbackReason::MalformedStructure;
     bool first_failure_recorded  = false;
-    while (candidate != std::string::npos) {
+    for (std::size_t attempt = 0; candidate != std::string::npos && attempt < kMaxMarkerAttempts;
+         ++attempt) {
         std::vector<RawToolCall> calls;
         const QwenToolRegionParser parser(source.substr(candidate), max_tool_name_length, contract);
         const FallbackReason failure = parser.parse(calls);
