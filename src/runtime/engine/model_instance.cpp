@@ -4,6 +4,7 @@
 #include "ops/common/device_route.h"
 #include "runtime/engine/context_cache/context_cost.h"
 #include "runtime/engine/device_profile.h"
+#include "runtime/engine/diagnostics.h"
 #include "artifact/reader.h"
 #include "artifact/formats.h"
 #include "core/startup.h"
@@ -283,13 +284,15 @@ void install_device_route_profile_on(const EngineOptions& options, int device) {
         try {
             profile = find_device_route_profile(hardware_class, multiprocessors, path);
         } catch (const std::exception& error) {
-            std::fprintf(stderr, "[engine] device profile %s ignored: %s\n", path.string().c_str(),
-                         error.what());
+            publish_diagnostic(options.diagnostic_observer, DiagnosticLevel::Warning,
+                               "device profile %s ignored: %s", path.string().c_str(),
+                               error.what());
         }
     }
     if (!profile) {
-        std::fprintf(stderr, "[engine] calibrating routes for %s (%d SMs)\n", hardware_class.c_str(),
-                     multiprocessors);
+        publish_diagnostic(options.diagnostic_observer, DiagnosticLevel::Info,
+                           "calibrating routes for %s (%d SMs)", hardware_class.c_str(),
+                           multiprocessors);
         int previous = 0;
         CUDA_CHECK(cudaGetDevice(&previous));
         CUDA_CHECK(cudaSetDevice(device));
@@ -301,12 +304,14 @@ void install_device_route_profile_on(const EngineOptions& options, int device) {
         try {
             upsert_device_route_profile_atomic(path, *profile);
         } catch (const std::exception& error) {
-            std::fprintf(stderr, "[engine] device profile not saved to %s: %s\n",
-                         path.string().c_str(), error.what());
+            publish_diagnostic(options.diagnostic_observer, DiagnosticLevel::Warning,
+                               "device profile not saved to %s: %s", path.string().c_str(),
+                               error.what());
         }
     }
-    std::fprintf(stderr, "[engine] device profile %s: %zu routed keys (%s)\n", hardware_class.c_str(),
-                 profile->routes.size(), profile->origin.c_str());
+    publish_diagnostic(options.diagnostic_observer, DiagnosticLevel::Info,
+                       "device profile %s: %zu routed keys (%s)", hardware_class.c_str(),
+                       profile->routes.size(), profile->origin.c_str());
     ops::install_device_route_profile(
         device, std::make_shared<const ops::DeviceRouteProfile>(std::move(*profile)));
 }

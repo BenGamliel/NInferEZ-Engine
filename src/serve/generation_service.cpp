@@ -295,7 +295,8 @@ ninfer::EngineOptions make_engine_options(const ServeOptions& options) {
     return engine_options;
 }
 
-GenerationService::GenerationService(ServeOptions options, StartupObserver startup_observer)
+GenerationService::GenerationService(ServeOptions options, StartupObserver startup_observer,
+                                     DiagnosticObserver diagnostic_observer)
     : options_(std::move(options)) {
     // Inline ECC on GDDR6X GeForce cards reserves ~6.25% of VRAM for checksums and taxes
     // memory bandwidth on every access. Decode is bandwidth-bound, so an ECC-enabled card
@@ -318,6 +319,7 @@ GenerationService::GenerationService(ServeOptions options, StartupObserver start
     }
     ninfer::EngineOptions engine_options = make_engine_options(options_);
     engine_options.startup_observer      = std::move(startup_observer);
+    engine_options.diagnostic_observer   = std::move(diagnostic_observer);
     engine_           = std::make_unique<ninfer::Engine>(std::move(engine_options));
     request_capacity_ = std::make_shared<RequestCapacity>(
         static_cast<std::size_t>(options_.max_concurrency) + options_.max_pending_requests);

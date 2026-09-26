@@ -1,5 +1,7 @@
+#include "product/logging/engine_diagnostics.h"
 #include "product/logging/logging.h"
 #include "product/logging/startup_log.h"
+#include "runtime/engine/diagnostics.h"
 
 #include <spdlog/logger.h>
 
@@ -190,5 +192,35 @@ int main() {
     }
     failures +=
         check(tool_output == "engine ready\nerror: failed\n", "tool pretty prefix mismatch");
+
+    // Engine diagnostics are ordinary records at the level the Engine assigned: a debug one shows
+    // only when the verbosity is raised, and a warning shows at the default level.
+    for (const ninfer::product::LogLevel level :
+         {ninfer::product::LogLevel::Info, ninfer::product::LogLevel::Debug}) {
+        std::string output;
+        {
+            StderrCapture capture;
+            {
+                ninfer::product::LoggingRuntime logging(
+                    {.logger_name  = "ninfer",
+                     .level        = level,
+                     .color        = ninfer::product::LogColorMode::Never,
+                     .presentation = ninfer::product::LogPresentation::Tool});
+                const ninfer::DiagnosticObserver observer =
+                    ninfer::product::engine_diagnostic_observer(logging.logger());
+                ninfer::runtime::publish_diagnostic(observer, ninfer::DiagnosticLevel::Debug,
+                                                    "lane %u detail", 0U);
+                ninfer::runtime::publish_diagnostic(observer, ninfer::DiagnosticLevel::Warning,
+                                                    "worker out of memory: lane %u", 1U);
+                logging.flush();
+            }
+            output = capture.finish();
+        }
+        const bool debug_shown = output.find("engine | lane 0 detail") != std::string::npos;
+        failures += check(debug_shown == (level == ninfer::product::LogLevel::Debug),
+                          "a debug Engine diagnostic must follow the log level");
+        failures += check(output.find("engine | worker out of memory: lane 1") != std::string::npos,
+                          "a warning Engine diagnostic must show at the default level");
+    }
     return failures == 0 ? 0 : 1;
 }

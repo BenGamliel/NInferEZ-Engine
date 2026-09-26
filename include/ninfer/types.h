@@ -178,6 +178,27 @@ struct StartupObserver {
     std::function<void(const StartupEvent& event)> callback;
 };
 
+enum class DiagnosticLevel : std::uint8_t {
+    Debug,
+    Info,
+    Warning,
+    Error,
+};
+
+// One runtime diagnostic from the Engine: the device route profile it installs, recovery from out
+// of memory or a failed worker step, and context stores rebuilt after that recovery.
+struct Diagnostic {
+    DiagnosticLevel level = DiagnosticLevel::Info;
+    std::string message;
+};
+
+struct DiagnosticObserver {
+    // Receives every diagnostic, from the worker thread or the constructing one; the product
+    // decides which levels to show. Without a callback, Info and above go to stderr. Callback
+    // exceptions are ignored so a logging failure cannot disturb execution.
+    std::function<void(const Diagnostic& diagnostic)> callback;
+};
+
 struct ContextCacheOptions {
     // Engine resolves every optional once at construction. With C=max_concurrency, the enabled
     // defaults are H=C, R=8, Host KV=8 GiB, P=2C, S=max(C,4) and L=2 (4 with automatic anchors);
@@ -357,6 +378,7 @@ struct EngineOptions {
     std::string device_profile = "auto";
     std::filesystem::path device_profile_path;
     StartupObserver startup_observer;
+    DiagnosticObserver diagnostic_observer;
 };
 
 enum class SamplingMode : std::uint8_t {

@@ -1,5 +1,6 @@
 #include "ninfer_build_id.h"
 #include "options.h"
+#include "product/logging/engine_diagnostics.h"
 #include "product/logging/logging.h"
 #include "product/logging/pretty_format.h"
 #include "product/logging/startup_log.h"
@@ -315,6 +316,7 @@ int main(int argc, char** argv) {
         engine_options.context_cache.host_state_slots       = 0;
         engine_options.context_cache.host_kv_capacity_bytes = 0;
         engine_options.startup_observer                     = startup_log.observer();
+        engine_options.diagnostic_observer = ninfer::product::engine_diagnostic_observer(logger);
 
         ninfer::Engine engine(std::move(engine_options));
         startup_log.engine_ready(engine.load_summary());

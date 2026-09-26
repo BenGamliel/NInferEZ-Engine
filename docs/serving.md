@@ -1323,7 +1323,11 @@ summed across concurrent requests**.
 The JSONL file contains no generated response text and never records an API-key value; `argv`
 replaces that value with `<redacted>`. The existing stderr summaries remain available for operators
 but are rounded and are not the aggregation source. Console lines use local
-`[YYYY-MM-DD HH:MM:SS.mmm] [level]` timestamps. OpenAI Responses, OpenAI Chat, and Anthropic
+`[YYYY-MM-DD HH:MM:SS.mmm] [level]` timestamps. Engine runtime diagnostics are ordinary records
+prefixed `engine |` that `--log-level` filters: the device route profile the Engine installs and a
+calibration it runs are `info`; an ignored or unsaved profile, recovery from out of memory and
+context stores rebuilt after it are warnings; a worker crash or repeated recoveries that fail every
+pending request are errors. OpenAI Responses, OpenAI Chat, and Anthropic
 generation requests receive a request ID when they enter synchronous preparation. Successful
 preparation produces `request_start`; a preparation failure produces `request_rejected` without a
 matching start. Later generation failures produce `request_error`. Schema/model validation
