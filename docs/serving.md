@@ -1331,6 +1331,12 @@ means the wall or control allowance ran out, while a request too cheap to justif
 reports `insufficient_expected_gain`. Search phases are `none`, `setup`, `construction`,
 `assessment`, `expansion` and `refinement`. Search is bounded and heuristic; these diagnostics do not
 claim model or global optimality, and aborted planning attempts are not published.
+`cached_prefix_tokens` and `restored_host_bytes` describe a hybrid prefix-cache admission and are `0`
+with the checkpoint catalog. `cached_prefix_tokens` is the longest prompt prefix held as cached KV
+blocks, whether or not it was reusable: reuse also needs a state snapshot inside it, so a gap to
+`prefix_cache_hit_tokens` is prefix lost to snapshot placement. `restored_host_bytes` is what the
+admission copied back from the Host tier; those copies overlap the request's first prefill pass, so
+their time is part of its prefill.
 
 `request_done.result.tool_call_parse` records whether a complete marker was seen, the structured
 call count, empty non-string arguments omitted during normalization, schema-mismatched arguments
@@ -1418,6 +1424,27 @@ request-owned and appear only on the corresponding `request_done` event.
 request-local abort; committed victim counters likewise report the resulting stable cache changes.
 `salvage.published` counts cancelled requests whose live state was published as a continuation
 endpoint at its last committed frontier.
+`captures.skipped` counts capture offers the Program declined because they were not physically
+feasible: unlike `captures.aborted` it has no other trace, so it is the counter for silent retention
+loss. `occupancy.device_main_kv_lease_pages` and `device_backend_kv_lease_pages` are the part of
+`device_main_kv_pages` and `device_backend_kv_pages` that active requests hold as reservation but
+have not yet written.
+
+With `--use-alt-prefix-caching`, `context_cache.hybrid` is present once the cache has inserted a
+block or holds a snapshot. `device_blocks` (Device-resident 64-token KV blocks), `evictable_blocks`
+(those Device eviction may drop now), `tree_blocks` (blocks on the Device or Host), `snapshots`,
+`host_capacity_bytes` and `host_used_bytes` are end-of-interval gauges; the rest are interval
+deltas. `snapshot_hits` counts admissions that resumed from a snapshot and `reused_tokens` the
+prompt tokens they reused. `blocks_inserted` counts new tree blocks, `blocks_reattached` blocks whose
+existing tree entry took a request's Device pages, and `blocks_duplicate` committed blocks the tree
+already held on the Device, whose pages were released. `taps_created` and `taps_skipped` count
+planned prefill snapshots published and dropped, and `endpoints_created` end-of-answer snapshots.
+`host_image_writes`, `host_block_writes`, `host_image_restores`, `host_block_restores`,
+`host_write_bytes` and `host_restore_bytes` count Host-tier write-through and restores.
+`evicted_blocks` counts Device block evictions, `host_snapshot_evictions` snapshots evicted from the
+Host tier, `host_dead_reclaims` Host slabs reclaimed from KV that no snapshot can reach, and
+`unbacked_node_losses` Device evictions of blocks with no Host copy, which remove them and the
+blocks after them from the cache.
 
 The JSONL `throughput.host_work` object is the aggregation authority: the Engine worker counts each
 wall-time segment once, independent of batch size. `elapsed_seconds` contains the same five
