@@ -20,6 +20,7 @@ Python tools are independent of CMake; there is no `NINFER_BUILD_TOOLS` option.
 | One-time upgrade of official v2 artifacts | [`upgrade_ninfer_v2_to_v3.py`](upgrade_ninfer_v2_to_v3.py), with positional `INPUT OUTPUT` paths |
 | Run benchmark matrices | [`bench/`](bench/README.md) |
 | Measure external Serve TTFT | [`bench/ttft/`](bench/ttft/README.md) |
+| Watch a resident server: dashboard, and restart on a wedge | [`monitor/`](monitor/README.md) |
 | Exercise a resident HTTP server | [`smoke/serve_contract.py`](smoke/serve_contract.py) |
 | Exercise thinking preservation through a managed server | [`smoke/serve_thinking_preservation.py`](smoke/serve_thinking_preservation.py) |
 | Measure the physical HBM read/copy ceiling | [`hbm_bandwidth_probe.cu`](hbm_bandwidth_probe.cu); [build command](#standalone-hbm-probe) |
