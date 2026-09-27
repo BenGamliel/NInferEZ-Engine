@@ -618,6 +618,7 @@ std::string format_request_done(const RequestLogContext& context,
             << " control_tokens=" << outcome.thinking.injected_tokens
             << " control=" << (outcome.thinking.applied ? "applied" : "unused");
     }
+    if (outcome.thinking.post_thinking_sampling) { out << " post_thinking=applied"; }
     return out.str();
 }
 
@@ -819,6 +820,11 @@ std::string format_server_start_json(
         Json{{"thinking", preset_json(sampling_defaults.thinking)},
              {"non_thinking", preset_json(sampling_defaults.non_thinking)},
              {"server_overrides", overrides_json(options.sampling_overrides)},
+             {"post_thinking",
+              Json{{"preset", preset_json(sampling_defaults.post_thinking)},
+                   {"server_overrides", options.post_thinking_overrides
+                                            ? overrides_json(*options.post_thinking_overrides)
+                                            : Json(nullptr)}}},
              {"omitted_seed", "random"},
              {"greedy", options.greedy}};
     record["memory"] =
@@ -895,6 +901,7 @@ std::string format_request_done_json(const std::string& server_instance_id, std:
              {"model_thinking_tokens", outcome.thinking.model_thinking_tokens},
              {"thinking_control_tokens", outcome.thinking.injected_tokens},
              {"thinking_control_applied", outcome.thinking.applied},
+             {"post_thinking_sampling", outcome.thinking.post_thinking_sampling},
              {"tool_call_count", outcome.tool_calls.size()},
              {"tool_call_parse", tool_call_parse_json(outcome.tool_call_parse)}};
     record["timings_seconds"] = Json{

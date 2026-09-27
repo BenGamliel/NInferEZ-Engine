@@ -435,6 +435,7 @@ The endpoint supports:
   processing without generation, and llama.cpp's `-1` generates until the context runs out;
 - `temperature`, `top_p`, presence/frequency penalties, and signed integer `seed`;
 - the compatible `top_k` (`0..20`) and `min_p` (`0..1`) sampler extensions;
+- the `post_thinking` extension object (see [post-thinking sampling](#post-thinking-sampling));
 - up to four non-empty stop strings, applied to both reasoning and answer output;
 - the `ignore_eos` benchmarking extension shared with vLLM, SGLang and llama.cpp: a boolean,
   default `false`, that drops the checkpoint's own stop tokens so generation runs to the output
@@ -1260,6 +1261,9 @@ The table lists executable defaults. The startup example selects a long-context 
 | `--frequency-penalty F` | process-level frequency-penalty override | unset |
 | `--seed N` | fixed seed when a request omits one | fresh random seed per request |
 | `--greedy` | force exact argmax for all requests | off |
+| `--post-thinking` | sample the answer of every thinking request with the post-thinking preset once its reasoning closes | off |
+| `--post-thinking-temperature F`, `--post-thinking-top-p F`, `--post-thinking-top-k N` | post-thinking overrides; each implies `--post-thinking` | preset |
+| `--post-thinking-sampler temp=F,top_p=F,top_k=N[,min_p=F,presence=F,frequency=F]` | the same overrides in one flag | preset |
 
 Context-cost coefficients resolve once at startup from generic defaults, matching compiled values,
 and optional transfer or prefill entries from `--context-cost-presets FILE`. Prefill entries match
@@ -1274,6 +1278,26 @@ temperature/top-p/top-k/min-p/presence penalty in thinking mode and `0.7/0.80/20
 non-thinking mode. Qwen3.6-35B-A3B differs only in its thinking presence penalty, which is `1.5`.
 Frequency penalty is `0` for all registered presets. Process flags override registered values,
 request fields override process flags, and `--greedy` finally forces temperature `0`.
+
+### Post-thinking sampling
+
+A thinking request samples its reasoning and its answer with one preset. Post-thinking sampling
+switches the device sampler once, at the first decode round after the model closes its reasoning
+block, to a second preset: the thinking preset with temperature `0.2`. Tokens that a speculative
+round accepts together with the close keep the reasoning sampler. It is off by default. The server enables
+it for every thinking request with `--post-thinking` or any `--post-thinking-*` override; a single
+request enables it with a `post_thinking` object on Chat Completions, Responses or Messages:
+
+```json
+{"post_thinking": {"temperature": 0.1, "top_k": 10}}
+```
+
+The object accepts `temperature` (`0..2`; `0..1` on Messages), `top_p`, `top_k`, `min_p`,
+`presence_penalty`, `frequency_penalty` and `seed`; an empty object selects the preset. Request
+fields override the server's post-thinking flags, omitted fields come from the preset, an omitted
+seed continues the request's seed, and `--greedy` forces temperature `0` in both phases. A request
+without thinking, or one whose reasoning never closes, keeps its original sampler. The JSONL
+`request_done` record reports `post_thinking_sampling` when the switch happened.
 
 For `C=--max-concurrency` and `H=--device-state-slots`, total Device StateImage capacity is `C+H`:
 `C` slots guarantee active requests and `H` is a global checkpoint pool. Host State and Host KV are

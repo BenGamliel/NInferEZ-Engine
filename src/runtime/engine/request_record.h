@@ -195,6 +195,8 @@ struct RequestRecord {
     RequestHostTiming host_timing;
     SpeculativeStats speculative_stats;
     std::optional<FirstTokenLogprobs> first_token_logprobs;
+    // The switch to post-thinking sampling has been applied to this request's lane.
+    bool post_thinking_applied = false;
     MaterializationDiagnostics materialization_diagnostics;
 
     std::mutex mutex;

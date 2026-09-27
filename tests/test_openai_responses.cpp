@@ -119,6 +119,7 @@ int test_basic_request_and_resolution() {
                        {"max_output_tokens", 64},
                        {"temperature", 0.3},
                        {"top_p", 0.8},
+                       {"post_thinking", Json{{"temperature", 0.2}, {"seed", 7}}},
                        {"reasoning", Json{{"effort", "medium"}}},
                        {"metadata", Json{{"trace", "abc"}}}};
     const OpenAIResponsesCreateRequest request =
@@ -146,10 +147,16 @@ int test_basic_request_and_resolution() {
               "reasoning effort parsed");
     failures += check(request.store && !request.stream && request.parallel_tool_calls,
                       "Responses defaults applied");
+    failures += check(request.prompt.generation.post_thinking &&
+                          request.prompt.generation.post_thinking->temperature == 0.2 &&
+                          request.prompt.generation.post_thinking->seed == 7U,
+                      "post_thinking parsed");
 
     OpenAIResponsesStore store(8, 1ULL << 20);
     const OpenAIResponsesResolvedPrompt resolved =
         resolve_openai_responses_prompt(request.prompt, store, "resp_current", true);
+    failures += check(resolved.generation.post_thinking.has_value(),
+                      "post_thinking survives prompt resolution");
     failures += check(resolved.generation.messages.size() == 2 &&
                           resolved.generation.messages[0].role == ninfer::ChatRole::Developer &&
                           resolved.generation.messages[0].content[0].text == "be concise" &&

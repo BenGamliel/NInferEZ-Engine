@@ -134,6 +134,10 @@ struct ServeOptions {
     // Process-level explicit overrides layered between registered model/mode defaults and request
     // fields. An omitted seed is replaced per request with a fresh random seed.
     SamplingOverrides sampling_overrides;
+    // --post-thinking and --post-thinking-*: thinking requests switch to these overrides (omitted
+    // fields from the model's post-thinking preset) from the token after reasoning closes. Without
+    // them a request opts in with its own `post_thinking` object.
+    std::optional<SamplingOverrides> post_thinking_overrides;
     bool greedy                 = false; // --greedy: force temperature 0 (exact argmax)
     product::LogLevel log_level = product::LogLevel::Info;
 

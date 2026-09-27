@@ -88,6 +88,33 @@ ninfer::SamplingOverrides resolve_sampling_overrides(const SamplingParams& reque
     return sampling;
 }
 
+// Request fields over the server's --post-thinking overrides; neither present leaves the answer
+// on the request's sampler. The request fields were range-checked by the protocol parser.
+std::optional<ninfer::SamplingOverrides>
+resolve_post_thinking_overrides(const std::optional<SamplingParams>& request,
+                                const ServeOptions& server) {
+    if (!request && !server.post_thinking_overrides) { return std::nullopt; }
+    ninfer::SamplingOverrides sampling =
+        server.post_thinking_overrides.value_or(ninfer::SamplingOverrides{});
+    if (request) {
+        if (request->temperature) {
+            sampling.temperature = static_cast<float>(*request->temperature);
+        }
+        if (request->top_p) { sampling.top_p = static_cast<float>(*request->top_p); }
+        if (request->min_p) { sampling.min_p = static_cast<float>(*request->min_p); }
+        if (request->top_k) { sampling.top_k = static_cast<std::int32_t>(*request->top_k); }
+        if (request->presence_penalty) {
+            sampling.presence_penalty = static_cast<float>(*request->presence_penalty);
+        }
+        if (request->frequency_penalty) {
+            sampling.frequency_penalty = static_cast<float>(*request->frequency_penalty);
+        }
+        if (request->seed) { sampling.seed = *request->seed; }
+    }
+    if (server.greedy) { sampling.temperature = 0.0F; }
+    return sampling;
+}
+
 std::vector<const ToolDefinition*> effective_tools(const GenerationRequest& request) {
     std::vector<const ToolDefinition*> tools;
     if (!request.uses_tools()) { return tools; }
@@ -369,6 +396,8 @@ ninfer::RequestOptions to_request_options(const GenerationRequest& request,
             request.thinking_budget ? request.thinking_budget : server.default_thinking_budget;
     }
     options.execution.sampling             = resolve_sampling_overrides(request.sampling, server);
+    options.execution.post_thinking_sampling =
+        resolve_post_thinking_overrides(request.post_thinking, server);
     options.execution.first_token_top_logprobs = request.first_token_top_logprobs;
     options.output.raw                     = false;
     options.output.preserve_special_tokens =

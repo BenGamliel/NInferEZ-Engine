@@ -960,6 +960,11 @@ int main() {
                                         "--no-webui",
                                         "--pending-timeout-ms",
                                         "--port",
+                                        "--post-thinking",
+                                        "--post-thinking-sampler",
+                                        "--post-thinking-temperature",
+                                        "--post-thinking-top-k",
+                                        "--post-thinking-top-p",
                                         "--prefill-chunk",
                                         "--prefill-cublas",
                                         "--prefix-cache-file",
@@ -1249,6 +1254,38 @@ int main() {
                     (void)parse({"ninfer-serve", "model.ninfer", "--rope-scaling-factor", bad});
                 } catch (const std::invalid_argument&) { rejected = true; }
                 const std::string message = std::string("--rope-scaling-factor accepted ") + bad;
+                failures += check(rejected, message.c_str());
+            }
+        }
+        {
+            failures += check(!parse({"ninfer-serve", "model.ninfer"}).post_thinking_overrides,
+                              "post-thinking sampling is not off by default");
+            const ServeOptions preset = parse({"ninfer-serve", "model.ninfer", "--post-thinking"});
+            failures += check(preset.post_thinking_overrides &&
+                                  !preset.post_thinking_overrides->temperature &&
+                                  !preset.post_thinking_overrides->top_k,
+                              "--post-thinking did not select the bare preset");
+            const ServeOptions fields =
+                parse({"ninfer-serve", "model.ninfer", "--post-thinking-temperature", "0.3",
+                       "--post-thinking-sampler", "top_p=0.9,top_k=10,presence=1.5"});
+            failures += check(fields.post_thinking_overrides &&
+                                  fields.post_thinking_overrides->temperature == 0.3F &&
+                                  fields.post_thinking_overrides->top_p == 0.9F &&
+                                  fields.post_thinking_overrides->top_k == 10 &&
+                                  fields.post_thinking_overrides->presence_penalty == 1.5F &&
+                                  !fields.post_thinking_overrides->min_p,
+                              "--post-thinking-* fields were not parsed");
+            for (const std::vector<std::string>& bad :
+                 {std::vector<std::string>{"--post-thinking-temperature", "2.5"},
+                  std::vector<std::string>{"--post-thinking-top-k", "21"},
+                  std::vector<std::string>{"--post-thinking-sampler", "temp"},
+                  std::vector<std::string>{"--post-thinking-sampler", "seed=1"},
+                  std::vector<std::string>{"--post-thinking-sampler", "top_p=nan"}}) {
+                bool rejected = false;
+                try {
+                    (void)parse({"ninfer-serve", "model.ninfer", bad[0].c_str(), bad[1].c_str()});
+                } catch (const std::invalid_argument&) { rejected = true; }
+                const std::string message = "accepted " + bad[0] + " " + bad[1];
                 failures += check(rejected, message.c_str());
             }
         }

@@ -301,6 +301,7 @@ int main(int argc, char** argv) {
 
         ninfer::RequestOptions request;
         request.execution.sampling                = cli.sampling;
+        request.execution.post_thinking_sampling  = cli.post_thinking_sampling;
         request.execution.structured_output       = cli.structured_output;
         request.execution.requested_output_tokens = cli.max_new;
         request.execution.thinking.budget         = cli.thinking_budget;

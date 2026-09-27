@@ -1,4 +1,5 @@
 #include "options.h"
+#include "product/post_thinking_options.h"
 #include "product/rope_yarn_options.h"
 #include "product/speculative_options.h"
 
@@ -240,6 +241,14 @@ std::string usage_text(const char* argv0) {
            "  --frequency-penalty F         -2..2\n"
            "  --seed N                      fixed random seed\n"
            "  --greedy                      force temperature 0 (exact argmax)\n"
+           "  --post-thinking               sample the answer of a thinking request with the\n"
+           "                                post-thinking preset (temperature 0.2) from the\n"
+           "                                token after its reasoning closes (default off)\n"
+           "  --post-thinking-temperature F 0..2; implies --post-thinking\n"
+           "  --post-thinking-top-p F       0..1; implies --post-thinking\n"
+           "  --post-thinking-top-k N       0..20; implies --post-thinking\n"
+           "  --post-thinking-sampler temp=F,top_p=F,top_k=N[,min_p=F,presence=F,frequency=F]\n"
+           "                                the same fields in one flag\n"
            "  --stop-token-id N             stop on this token id; repeatable\n"
            "  --stop TEXT                   stop on this answer text; repeatable\n"
            "  --reasoning-stop TEXT         stop on this reasoning text; repeatable\n"
@@ -478,6 +487,18 @@ Options parse_options(int argc, char** argv) {
             options.sampling.seed = parse_u64(value(arg), "seed");
         } else if (arg == "--greedy") {
             options.greedy = true;
+        } else if (arg == "--post-thinking") {
+            if (!options.post_thinking_sampling) { options.post_thinking_sampling.emplace(); }
+        } else if (arg == "--post-thinking-temperature" || arg == "--post-thinking-top-p" ||
+                   arg == "--post-thinking-top-k") {
+            const std::string_view key = arg == "--post-thinking-temperature" ? "temp"
+                                         : arg == "--post-thinking-top-p"     ? "top_p"
+                                                                              : "top_k";
+            if (!options.post_thinking_sampling) { options.post_thinking_sampling.emplace(); }
+            product::set_post_thinking_field(*options.post_thinking_sampling, key, value(arg));
+        } else if (arg == "--post-thinking-sampler") {
+            if (!options.post_thinking_sampling) { options.post_thinking_sampling.emplace(); }
+            product::apply_post_thinking_sampler(value(arg), *options.post_thinking_sampling);
         } else if (arg == "--log-level") {
             options.log_level = product::parse_log_level(value(arg));
         } else {
@@ -541,7 +562,10 @@ Options parse_options(int argc, char** argv) {
     if (options.enable_thinking == false && options.thinking_budget) {
         throw std::invalid_argument("--thinking-budget cannot be combined with --no-thinking");
     }
-    if (options.greedy) { options.sampling.temperature = 0.0F; }
+    if (options.greedy) {
+        options.sampling.temperature = 0.0F;
+        if (options.post_thinking_sampling) { options.post_thinking_sampling->temperature = 0.0F; }
+    }
     return options;
 }
 

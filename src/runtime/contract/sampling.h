@@ -9,5 +9,7 @@ namespace ninfer::runtime {
 [[nodiscard]] ResolvedSamplingParameters resolve_sampling(const ModelSamplingDefaults& defaults,
                                                           SamplingMode mode,
                                                           const SamplingOverrides& overrides);
+[[nodiscard]] ResolvedSamplingParameters resolve_sampling(const SamplingPreset& preset,
+                                                          const SamplingOverrides& overrides);
 
 } // namespace ninfer::runtime

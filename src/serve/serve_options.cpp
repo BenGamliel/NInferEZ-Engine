@@ -1,4 +1,5 @@
 #include "serve/serve_options.h"
+#include "product/post_thinking_options.h"
 #include "product/rope_yarn_options.h"
 #include "product/speculative_options.h"
 
@@ -304,6 +305,15 @@ std::string serve_usage_text(const char* argv0) {
            "  --seed N                      seed of a request that sets none (default: fresh\n"
            "                                per request)\n"
            "  --greedy                      force temperature 0 (exact argmax)\n"
+           "  --post-thinking               sample a thinking request's answer with the\n"
+           "                                post-thinking preset (temperature 0.2) from the\n"
+           "                                token after its reasoning closes (default off;\n"
+           "                                a request opts in with a post_thinking object)\n"
+           "  --post-thinking-temperature F 0..2; implies --post-thinking\n"
+           "  --post-thinking-top-p F       0..1; implies --post-thinking\n"
+           "  --post-thinking-top-k N       0..20; implies --post-thinking\n"
+           "  --post-thinking-sampler temp=F,top_p=F,top_k=N[,min_p=F,presence=F,frequency=F]\n"
+           "                                the same fields in one flag\n"
            "  --no-thinking                 disable thinking by default\n"
            "  --preserve-thinking           retain closed-turn assistant reasoning in later\n"
            "                                prompts\n"
@@ -931,6 +941,20 @@ ServeOptions parse_serve_options(int argc, char** argv) {
             options.sampling_overrides.seed = parse_u64(require_value("--seed"), "seed");
         } else if (arg == "--greedy") {
             options.greedy = true;
+        } else if (arg == "--post-thinking") {
+            if (!options.post_thinking_overrides) { options.post_thinking_overrides.emplace(); }
+        } else if (arg == "--post-thinking-temperature" || arg == "--post-thinking-top-p" ||
+                   arg == "--post-thinking-top-k") {
+            const std::string_view key = arg == "--post-thinking-temperature" ? "temp"
+                                         : arg == "--post-thinking-top-p"     ? "top_p"
+                                                                              : "top_k";
+            if (!options.post_thinking_overrides) { options.post_thinking_overrides.emplace(); }
+            product::set_post_thinking_field(*options.post_thinking_overrides, key,
+                                             require_value(arg.c_str()));
+        } else if (arg == "--post-thinking-sampler") {
+            if (!options.post_thinking_overrides) { options.post_thinking_overrides.emplace(); }
+            product::apply_post_thinking_sampler(require_value("--post-thinking-sampler"),
+                                                 *options.post_thinking_overrides);
         } else if (arg == "--log-level") {
             options.log_level = product::parse_log_level(require_value("--log-level"));
         } else {

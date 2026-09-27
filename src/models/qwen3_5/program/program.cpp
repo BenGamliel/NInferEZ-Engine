@@ -404,6 +404,10 @@ bool Program::vision_pending(SequenceHandle sequence) const noexcept {
     return impl_->vision_pending(sequence);
 }
 
+void Program::update_sampling(SequenceHandle sequence, const ResolvedSamplingParameters& sampling) {
+    impl_->update_sampling(sequence, sampling);
+}
+
 bool Program::wait_context_transfer() noexcept { return impl_->wait_context_transfer(); }
 
 PrefillProgress Program::advance_prefill(SequenceHandle sequence,

@@ -754,6 +754,7 @@ private:
 
     void append_output(const std::shared_ptr<Request>& request, PublishedOutput output,
                        std::optional<GenerationTimingObservation> timing = std::nullopt) {
+        apply_post_thinking_sampling(*request);
         if (output.empty() && !timing) { return; }
         const bool streaming = request->consumer_mode == OutputConsumerMode::Streaming;
         {
@@ -767,6 +768,18 @@ private:
             }
         }
         if (streaming) { request->cv.notify_one(); }
+    }
+
+    // Every commit ends here, whether the model or a thinking-budget control closed the reasoning
+    // block, so the lane switches before its next round samples.
+    void apply_post_thinking_sampling(Request& request) {
+        if (request.post_thinking_applied || !request.options.execution.post_thinking_sampling ||
+            !request.sequence || !request.output.reasoning_closed()) {
+            return;
+        }
+        instance_.program->update_sampling(*request.sequence,
+                                           *request.options.execution.post_thinking_sampling);
+        request.post_thinking_applied = true;
     }
 
     void publish_prompt_progress(const std::shared_ptr<Request>& request) {
@@ -950,6 +963,7 @@ private:
         result.speculative             = std::move(request->speculative_stats);
         result.first_token_logprobs    = std::move(request->first_token_logprobs);
         result.thinking                = request->output.thinking_stats();
+        result.thinking.post_thinking_sampling = request->post_thinking_applied;
         if (request->ngram_archive) {
             result.ngram_archive.bound = true;
             if (reason != FinishReason::Cancelled &&

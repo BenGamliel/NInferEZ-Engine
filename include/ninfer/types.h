@@ -482,6 +482,9 @@ struct SamplingPreset {
 struct ModelSamplingDefaults {
     SamplingPreset thinking;
     SamplingPreset non_thinking;
+    // Applies from the token after a thinking request closes its reasoning block, when the
+    // request or the server asks for post-thinking sampling.
+    SamplingPreset post_thinking;
 
     [[nodiscard]] constexpr const SamplingPreset& for_mode(SamplingMode mode) const noexcept {
         return mode == SamplingMode::Thinking ? thinking : non_thinking;
@@ -548,6 +551,10 @@ inline constexpr std::uint32_t kMaximumFirstTokenTopLogprobs = 20;
 struct ExecutionOptions {
     StructuredOutputOptions structured_output;
     SamplingOverrides sampling;
+    // Present on a thinking request: from the token after the model closes its reasoning block,
+    // sampling switches to these values, omitted ones taken from the post-thinking preset and an
+    // omitted seed from the request. Ignored when thinking is off.
+    std::optional<SamplingOverrides> post_thinking_sampling;
     std::uint32_t requested_output_tokens = 0;
     bool allow_prefix_reuse               = true;
     ThinkingControlOptions thinking;
@@ -1065,6 +1072,8 @@ struct ThinkingBudgetStats {
     // Complete tokenizer-derived target-control suffix committed by Engine.
     std::uint32_t injected_tokens = 0;
     bool applied                  = false;
+    // The request switched to its post-thinking sampling when its reasoning block closed.
+    bool post_thinking_sampling = false;
 };
 
 enum class PrefixReusePath : std::uint8_t {

@@ -215,6 +215,8 @@ struct GenerationRequest {
     // client can actually observe.
     bool parallel_tool_calls = true;
     SamplingParams sampling;
+    // Sampling from the token after the reasoning block closes (a `post_thinking` object).
+    std::optional<SamplingParams> post_thinking;
     StructuredOutputOptions structured_output;
     // Log probabilities of the first generated token with this many alternatives; zero is off.
     std::uint32_t first_token_top_logprobs = 0;

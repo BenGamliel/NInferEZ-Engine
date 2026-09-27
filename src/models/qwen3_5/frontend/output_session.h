@@ -81,6 +81,8 @@ public:
     [[nodiscard]] ToolCallParseDiagnostics tool_call_parse_diagnostics() const noexcept;
     [[nodiscard]] std::uint32_t reasoning_tokens() const noexcept;
     [[nodiscard]] ThinkingBudgetStats thinking_stats() const noexcept;
+    // True once a session that began inside a reasoning block has committed its close.
+    [[nodiscard]] bool reasoning_closed() const noexcept;
     [[nodiscard]] std::optional<std::string> matched_stop_string() const;
 
 private:

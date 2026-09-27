@@ -214,6 +214,11 @@ int run_tests() {
                                         "--no-prefill-a8",
                                         "--no-prefill-cublas-projections",
                                         "--no-thinking",
+                                        "--post-thinking",
+                                        "--post-thinking-sampler",
+                                        "--post-thinking-temperature",
+                                        "--post-thinking-top-k",
+                                        "--post-thinking-top-p",
                                         "--prefill-chunk",
                                         "--prefill-cublas",
                                         "--presence-penalty",
@@ -318,6 +323,21 @@ int run_tests() {
                                        "--devices", "0,0", "--stage-layers", "0,64"});
                       }),
                       "a stage with no layers was accepted");
+    failures += check(!parse({"ninfer", "model.ninfer", "--prompt", "x"}).post_thinking_sampling,
+                      "CLI post-thinking sampling is not off by default");
+    const auto post_thinking =
+        parse({"ninfer", "model.ninfer", "--prompt", "x", "--post-thinking-top-k", "5",
+               "--post-thinking-sampler", "temp=0.4,frequency=-1", "--greedy"});
+    failures += check(post_thinking.post_thinking_sampling &&
+                          post_thinking.post_thinking_sampling->top_k == 5 &&
+                          post_thinking.post_thinking_sampling->frequency_penalty == -1.0F &&
+                          post_thinking.post_thinking_sampling->temperature == 0.0F,
+                      "CLI post-thinking fields or --greedy over them");
+    failures += check(rejects([] {
+                          (void)parse({"ninfer", "model.ninfer", "--prompt", "x",
+                                       "--post-thinking-sampler", "top_k=3,"});
+                      }),
+                      "a trailing empty post-thinking field was accepted");
     const auto structured = parse({"ninfer", "model.ninfer", "--prompt", "hello", "--json"});
     failures +=
         check(structured.structured_output.kind == ninfer::StructuredOutputKind::JsonObject &&

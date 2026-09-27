@@ -140,6 +140,31 @@ DecodeGraphExecutable& install_graph_profile(DecodeGraphFamily& family, DecodeGr
 
 } // namespace
 
+void ProgramImpl::update_sampling(SequenceHandle handle,
+                                  const ResolvedSamplingParameters& sampling) {
+    if (!valid_sequence(handle)) { throw std::logic_error("sampling update names no sequence"); }
+    const std::uint32_t lane  = ContractAccess::lane(handle).value;
+    RequestControl& request   = requests[lane];
+    ops::SamplingConfig& host = request.sampling_host;
+    host.temperature          = sampling.temperature;
+    host.top_k                = sampling.top_k;
+    host.top_p                = sampling.top_p;
+    host.min_p                = sampling.min_p;
+    host.presence_penalty     = sampling.presence_penalty;
+    host.frequency_penalty    = sampling.frequency_penalty;
+    // Penalties that start now count only the tokens sampled from here on.
+    if ((host.presence_penalty != 0.0F || host.frequency_penalty != 0.0F) &&
+        host.token_counts == nullptr) {
+        Tensor counts = token_counts.slice(1, static_cast<std::int32_t>(lane), 1)
+                            .view({dimension(parameters.model.resources().public_token_count)});
+        CUDA_CHECK(cudaMemsetAsync(counts.data, 0, counts.bytes(), device.stream));
+        host.token_counts = static_cast<std::int32_t*>(counts.data);
+    }
+    Tensor config_lane = sampling_config.slice(1, static_cast<std::int32_t>(lane), 1);
+    CUDA_CHECK(cudaMemcpyAsync(config_lane.data, &host, sizeof(host), cudaMemcpyHostToDevice,
+                               device.stream));
+}
+
 void ProgramImpl::install_sampling(SequenceState& sequence, RequestControl& request,
                                    const ops::SamplingConfig& config) {
     Tensor counts = token_counts.slice(1, static_cast<std::int32_t>(sequence.lane), 1)

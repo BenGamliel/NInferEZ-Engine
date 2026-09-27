@@ -109,6 +109,49 @@ int test_request_envelope_and_sampling() {
     failures +=
         check(translated.execution.sampling.seed == std::numeric_limits<std::uint64_t>::max(),
               "signed seed reaches Engine request options");
+    failures += check(!translated.execution.post_thinking_sampling,
+                      "post-thinking sampling stays off without a post_thinking object");
+
+    Json post_thinking                    = base_request();
+    post_thinking["post_thinking"]        = Json{{"temperature", 0.1}, {"top_k", 4}};
+    const ninfer::RequestOptions switched = options(parse(post_thinking).generation);
+    failures += check(switched.execution.post_thinking_sampling &&
+                          switched.execution.post_thinking_sampling->temperature == 0.1F &&
+                          switched.execution.post_thinking_sampling->top_k == 4 &&
+                          !switched.execution.post_thinking_sampling->top_p,
+                      "post_thinking fields reach Engine request options");
+    post_thinking["post_thinking"] = Json::object();
+    failures +=
+        check(options(parse(post_thinking).generation).execution.post_thinking_sampling.has_value(),
+              "an empty post_thinking object selects the preset");
+    for (const Json& bad : {Json(0.2), Json{{"temperature", 2.5}}, Json{{"top_k", 21}},
+                            Json{{"stop", "x"}}, Json{{"seed", 1.5}}}) {
+        post_thinking["post_thinking"] = bad;
+        failures +=
+            check(api_error([&] { (void)parse(post_thinking); }).param.starts_with("post_thinking"),
+                  "invalid post_thinking rejected: " + bad.dump());
+    }
+    {
+        ServeOptions server;
+        server.post_thinking_overrides.emplace();
+        server.post_thinking_overrides->temperature = 0.3F;
+        server.post_thinking_overrides->top_k       = 8;
+        server.greedy                               = true;
+        post_thinking["post_thinking"]              = Json{{"top_k", 2}};
+        const GenerationRequest request             = parse(post_thinking).generation;
+        const ninfer::RequestOptions merged =
+            to_request_options(request, server, semantics(request), true);
+        failures += check(merged.execution.post_thinking_sampling &&
+                              merged.execution.post_thinking_sampling->top_k == 2 &&
+                              merged.execution.post_thinking_sampling->temperature == 0.0F,
+                          "request post_thinking fields over server ones, --greedy over both");
+        const ninfer::RequestOptions server_only =
+            to_request_options(parse(base_request()).generation, server,
+                               semantics(parse(base_request()).generation), true);
+        failures += check(server_only.execution.post_thinking_sampling &&
+                              server_only.execution.post_thinking_sampling->top_k == 8,
+                          "--post-thinking applies to a request without its own object");
+    }
 
     const OpenAIChatRequest defaults = parse(base_request());
     failures +=

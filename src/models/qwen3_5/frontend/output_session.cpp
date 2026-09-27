@@ -387,6 +387,7 @@ public:
         }
         state.in_reasoning        = split_reasoning;
         prefix_execution.tracking = starts_in_reasoning;
+        started_in_reasoning      = starts_in_reasoning;
         semantic.budget           = thinking.budget;
         // The presentation decoder already tracks normal reasoning output. Keep the independent
         // semantic tracker dormant unless a cap needs it, so the default unlimited path does not
@@ -397,8 +398,9 @@ public:
     std::shared_ptr<const fi::Tokenizer> tokenizer;
     StopPolicy policy;
     std::shared_ptr<const std::vector<TokenId>> thinking_control_tokens;
-    bool preserve_special = false;
-    bool split_reasoning  = false;
+    bool preserve_special     = false;
+    bool split_reasoning      = false;
+    bool started_in_reasoning = false;
     DecoderState state;
     DecoderState preview_state;
     SemanticThinkingState semantic;
@@ -740,6 +742,10 @@ ToolCallParseDiagnostics OutputSession::tool_call_parse_diagnostics() const noex
 
 std::uint32_t OutputSession::reasoning_tokens() const noexcept {
     return impl_ != nullptr ? impl_->state.reasoning_tokens : 0;
+}
+
+bool OutputSession::reasoning_closed() const noexcept {
+    return impl_ != nullptr && impl_->started_in_reasoning && !impl_->prefix_execution.tracking;
 }
 
 ThinkingBudgetStats OutputSession::thinking_stats() const noexcept {

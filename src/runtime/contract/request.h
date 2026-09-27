@@ -19,6 +19,8 @@ struct ResolvedExecutionOptions {
     StructuredOutputOptions structured_output;
     std::shared_ptr<text::GrammarState> grammar;
     ResolvedSamplingParameters sampling;
+    // Applied once the model closes its reasoning block.
+    std::optional<ResolvedSamplingParameters> post_thinking_sampling;
     std::uint32_t requested_output_tokens = 0;
     bool allow_prefix_reuse               = true;
     ThinkingControlOptions thinking;
