@@ -140,6 +140,10 @@ struct SpeculativeOptions {
     // CPU-only retention, separate from KV. Zero keeps request-local drafting.
     std::size_t ngram_archive_bytes = 0;
     std::size_t ngram_session_bytes = 128ULL << 20;
+    // MTP only: the draft head attends to its first 64 keys and the newest this many keys before
+    // its query instead of the whole history; target verification keeps full attention, so the
+    // committed tokens do not depend on it. Zero reads the whole history.
+    std::uint32_t mtp_attention_window = 0;
 };
 
 enum class StartupPhase : std::uint8_t {

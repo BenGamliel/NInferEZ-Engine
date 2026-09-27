@@ -263,6 +263,10 @@ std::string serve_usage_text(const char* argv0) {
            "  --adaptive-mtp                each MTP round verifies 3..--draft-tokens\n"
            "                                drafts, the width the drafts' measured survival\n"
            "                                and round cost favor; greedy output is unchanged\n"
+           "  --mtp-attention-window N      the MTP draft head attends to its first 64 keys\n"
+           "                                and the newest N before its query, not the\n"
+           "                                whole history; verification is unchanged\n"
+           "                                (default 0: whole history)\n"
            "  --ngram-draft-tokens N        copy up to N tokens (1..63) per round from\n"
            "                                earlier prompt, tool-result or output text,\n"
            "                                verified alongside --spec; on with 15 whenever\n"
@@ -871,6 +875,10 @@ ServeOptions parse_serve_options(int argc, char** argv) {
             options.speculative.proposal_head = ProposalHead::Optimized;
         } else if (arg == "--adaptive-mtp") {
             options.speculative.mtp_policy = MtpDraftPolicy::Adaptive;
+        } else if (arg == "--mtp-attention-window") {
+            options.speculative.mtp_attention_window =
+                static_cast<std::uint32_t>(parse_nonnegative_int(
+                    require_value("--mtp-attention-window"), "mtp-attention-window"));
         } else if (arg == "--lm-head-q4") {
             options.lm_head_q4 = true;
         } else if (arg == "--lm-head-q6") {

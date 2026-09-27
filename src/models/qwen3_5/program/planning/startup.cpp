@@ -516,6 +516,10 @@ WorkspacePlan build_workspace_plan(const SequencePlanImpl& plan) {
         scratch(layout, execution::mtp_projection_workspace_bytes(parameters.mtp->projection,
                                                                   tokens, tokens));
         (void)workspace::mtp_attention_results(layout, config, tokens);
+        if (plan.mtp_attention_window != 0) {
+            (void)workspace::paged_kv_window(
+                layout, static_cast<std::int32_t>(page_count(plan.capacity)), tokens, 1);
+        }
         scratch(layout, ops::causal_softmax_attention_workspace_capacity_bytes(
                             {dimension(config.attention->head_dim),
                              dimension(config.attention->num_attention_heads),
@@ -654,6 +658,10 @@ WorkspacePlan build_workspace_plan(const SequencePlanImpl& plan) {
                 scratch(layout, execution::mtp_projection_workspace_bytes(
                                     parameters.mtp->projection, tokens, tokens));
                 (void)workspace::mtp_attention_results(layout, config, tokens);
+                if (plan.mtp_attention_window != 0) {
+                    (void)workspace::paged_kv_window(
+                        layout, static_cast<std::int32_t>(page_count(plan.capacity)), width, batch);
+                }
                 scratch(layout, ops::causal_softmax_attention_workspace_capacity_bytes(
                                     {dimension(config.attention->head_dim),
                                      dimension(config.attention->num_attention_heads),
@@ -975,6 +983,10 @@ void validate_target_options(const execution::Parameters& parameters, DeviceCont
     default:
         throw std::invalid_argument("unknown kv_capacity policy");
     }
+    if (options.speculative.mtp_attention_window != 0 &&
+        options.speculative.backend != SpeculativeBackend::Mtp) {
+        throw std::invalid_argument("an MTP attention window requires the MTP backend");
+    }
     switch (options.speculative.backend) {
     case SpeculativeBackend::None:
         if (options.speculative.draft_tokens != 0 ||
@@ -987,6 +999,11 @@ void validate_target_options(const execution::Parameters& parameters, DeviceCont
         if (options.speculative.draft_tokens == 0 ||
             options.speculative.draft_tokens > kMaximumMtpDraftTokens) {
             throw std::invalid_argument("MTP draft window must be in [1,15]");
+        }
+        if (options.speculative.mtp_attention_window != 0 &&
+            options.speculative.mtp_attention_window < options.speculative.draft_tokens + 1) {
+            throw std::invalid_argument(
+                "MTP attention window must hold at least draft_tokens + 1 keys");
         }
         break;
     case SpeculativeBackend::DFlash:
@@ -1047,6 +1064,7 @@ std::unique_ptr<SequencePlanImpl> build_sequence_candidate(const SequencePlannin
     impl->speculative_backend = inputs.speculative_backend;
     impl->proposal_head       = inputs.proposal_head;
     impl->rope_yarn           = inputs.rope_yarn;
+    impl->mtp_attention_window = inputs.mtp_attention_window;
     impl->features            = inputs.features;
     impl->use_cuda_graph      = inputs.use_cuda_graph;
     impl->causal_scoring      = inputs.causal_scoring;
@@ -1334,6 +1352,7 @@ make_sequence_planner_impl(const execution::Parameters& parameters, DeviceContex
         .kv_storage                 = options.kv_cache,
         .proposal_head              = options.speculative.proposal_head,
         .rope_yarn                  = planned_rope_yarn(parameters, options),
+        .mtp_attention_window       = options.speculative.mtp_attention_window,
         .features                   = models::load_options(options),
         .use_cuda_graph             = options.use_cuda_graph,
         .cuda_graph_allowance_bytes = options.cuda_graph_allowance_bytes,

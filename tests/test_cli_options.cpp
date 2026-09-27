@@ -207,6 +207,7 @@ int run_tests() {
                                         "--messages",
                                         "--min-p",
                                         "--mlp-a8-decode",
+                                        "--mtp-attention-window",
                                         "--mtp-experts-q4",
                                         "--ngram-draft-tokens",
                                         "--ngram-min-match",
@@ -323,6 +324,15 @@ int run_tests() {
                                        "--devices", "0,0", "--stage-layers", "0,64"});
                       }),
                       "a stage with no layers was accepted");
+    failures += check(parse({"ninfer", "model.ninfer", "--prompt", "x", "--spec", "mtp",
+                             "--draft-tokens", "3", "--mtp-attention-window", "2048"})
+                              .speculative.mtp_attention_window == 2048,
+                      "CLI --mtp-attention-window not parsed");
+    failures += check(rejects([] {
+                          (void)parse({"ninfer", "model.ninfer", "--prompt", "x",
+                                       "--mtp-attention-window", "2048"});
+                      }),
+                      "CLI --mtp-attention-window accepted without --spec mtp");
     failures += check(!parse({"ninfer", "model.ninfer", "--prompt", "x"}).post_thinking_sampling,
                       "CLI post-thinking sampling is not off by default");
     const auto post_thinking =

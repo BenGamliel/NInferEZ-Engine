@@ -31,6 +31,7 @@
 #include "ninfer/ops/position.h"
 #include "ninfer/ops/residual_add.h"
 #include "ninfer/ops/rmsnorm.h"
+#include "ninfer/ops/paged_kv_window.h"
 #include "ninfer/ops/rope.h"
 #include "ninfer/ops/sparse_moe.h"
 #include "ninfer/ops/scatter.h"
@@ -381,22 +382,32 @@ void TextContext::mtp_forward_tail(Tensor& x, const Tensor& ah, const Tensor& po
                                            dimension(config_.attention->num_attention_heads), width,
                                            active_sequence_batch_});
         Tensor position_batch = positions.view({width, active_sequence_batch_});
+        Tensor table_rows     = *active_backend_kv_table_rows_;
+        auto view             = batch_mtp_kv_->batch_layer_view(0);
+        if (mtp_attention_window_ != 0) {
+            window_mtp_attention(view, table_rows, position_batch, *active_valid_columns_);
+        }
         ops::causal_softmax_attention(
-            q_batch, k_batch, v_batch, position_batch, *active_valid_columns_,
-            *active_backend_kv_table_rows_,
+            q_batch, k_batch, v_batch, position_batch, *active_valid_columns_, table_rows,
             {dimension(config_.attention->head_dim),
              dimension(config_.attention->num_attention_heads),
              dimension(config_.attention->num_key_value_heads)},
             static_cast<float>(1.0 / std::sqrt(static_cast<double>(config_.attention->head_dim))),
-            batch_mtp_kv_->batch_layer_view(0), envelope, work_, a_batch, s, &gate_batch);
+            view, envelope, work_, a_batch, s, &gate_batch);
     } else {
+        Tensor position_rows = positions.view({T, 1});
+        Tensor table_rows    = io_.backend_kv_table_row;
+        auto view            = batch_mtp_kv_->batch_layer_view(0);
+        if (mtp_attention_window_ != 0) {
+            window_mtp_attention(view, table_rows, position_rows, Tensor{});
+        }
         ops::causal_softmax_attention(
-            qn, kn, v, positions, Tensor{}, io_.backend_kv_table_row,
+            qn, kn, v, position_rows.view({T}), Tensor{}, table_rows,
             {dimension(config_.attention->head_dim),
              dimension(config_.attention->num_attention_heads),
              dimension(config_.attention->num_key_value_heads)},
             static_cast<float>(1.0 / std::sqrt(static_cast<double>(config_.attention->head_dim))),
-            batch_mtp_kv_->batch_layer_view(0), envelope, work_, a, s, &gate);
+            view, envelope, work_, a, s, &gate);
     }
 
     const auto post = workspace::mtp_post_attention(work_, config_, T);
@@ -414,6 +425,24 @@ void TextContext::mtp_forward_tail(Tensor& x, const Tensor& ah, const Tensor& po
 
     Tensor flat_mtp_hidden = mtp_hidden.view({dimension(config_.hidden_size), T});
     ops::rmsnorm(x, mtp_->final_norm, config_.rms_norm_eps, true, flat_mtp_hidden, s);
+}
+
+// The MTP draft attends to one sink page and the newest window, so its read stops growing with
+// the context; target verification keeps full attention and alone decides what is committed. The
+// K/V rows the draft appends land in their own pages through the windowed table.
+void TextContext::window_mtp_attention(PagedKVBatchLayerView& view, Tensor& table_rows,
+                                       Tensor& positions, const Tensor& valid_columns) {
+    const auto window = workspace::paged_kv_window(work_, view.block_tables.ne[0], positions.ne[0],
+                                                   table_rows.ne[0]);
+    Tensor tables     = window.tables;
+    Tensor rows       = window.rows;
+    Tensor shifted    = window.positions;
+    ops::paged_kv_window_rows(view.block_tables, table_rows, positions, valid_columns, 1,
+                              static_cast<std::int32_t>(mtp_attention_window_), tables, rows,
+                              shifted, ctx_.stream);
+    view.block_tables = tables;
+    table_rows        = rows;
+    positions         = shifted;
 }
 
 void TextContext::mtp_forward_core(const Tensor& ids, const Tensor& hidden, const Tensor& positions,

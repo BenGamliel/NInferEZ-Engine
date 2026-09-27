@@ -92,6 +92,10 @@ public:
 
     void set_rope_yarn(const ops::RopeYarn& yarn) noexcept { rope_yarn_ = yarn; }
 
+    // Keys before its first query that the MTP draft attention reads past its one-page sink;
+    // zero reads the whole history.
+    void set_mtp_attention_window(std::uint32_t keys) noexcept { mtp_attention_window_ = keys; }
+
     // Present when the model is split over several devices; see StageRuntime.
     void set_stage_runtime(StageRuntime* runtime) noexcept { stage_runtime_ = runtime; }
 
@@ -218,6 +222,8 @@ private:
     void mtp_forward_tail(Tensor& x, const Tensor& ah, const Tensor& positions,
                           const Tensor& rope_positions,
                           ops::CausalAttentionExecutionEnvelope envelope, Tensor& mtp_hidden);
+    void window_mtp_attention(PagedKVBatchLayerView& view, Tensor& table_rows, Tensor& positions,
+                              const Tensor& valid_columns);
     void mtp_forward_core(const Tensor& ids, const Tensor& hidden, const Tensor& positions,
                           const Tensor& rope_positions,
                           ops::CausalAttentionExecutionEnvelope envelope, Tensor& mtp_hidden,
@@ -288,6 +294,7 @@ private:
     int proposal_head_n_                        = 0;
     const ops::SamplingConfig* sampling_config_ = nullptr;
     ops::RopeYarn rope_yarn_;
+    std::uint32_t mtp_attention_window_         = 0;
     const MtpParameters* mtp_                   = nullptr;
     StageRuntime* stage_runtime_                = nullptr;
 };

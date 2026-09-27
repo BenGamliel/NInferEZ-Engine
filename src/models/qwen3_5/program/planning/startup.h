@@ -108,6 +108,7 @@ struct SequencePlanningInputs {
     KvCacheStorage kv_storage               = KvCacheStorage::BFloat16;
     ProposalHead proposal_head              = ProposalHead::Full;
     ops::RopeYarn rope_yarn;
+    std::uint32_t mtp_attention_window = 0;
     models::LoadOptions features;
     bool use_cuda_graph    = true;
     // Nonzero replaces the computed per-profile CUDA Graph allowance in total.
@@ -140,6 +141,7 @@ struct SequencePlanImpl {
     KvCacheStorage kv_storage               = KvCacheStorage::BFloat16;
     ProposalHead proposal_head              = ProposalHead::Full;
     ops::RopeYarn rope_yarn;
+    std::uint32_t mtp_attention_window = 0;
     models::LoadOptions features;
     bool use_cuda_graph    = true;
     bool causal_scoring    = false;

@@ -324,7 +324,8 @@ void ProgramImpl::prepare_graphs() {
                                         proposal_head,
                                         stage_runtime.get(),
                                         rope_yarn,
-                                        fast_prefill_kernel};
+                                        fast_prefill_kernel,
+                                        mtp_attention_window};
     };
 
     const auto& text_attention = *parameters.model.config().text.attention;

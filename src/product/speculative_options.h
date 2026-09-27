@@ -56,6 +56,12 @@ inline void validate_speculative_cli_options(const SpeculativeOptions& options) 
         throw std::invalid_argument(
             "ngram requires --spec mtp|dflash|dflash2, drafts 1..63 and match 4..64");
     }
+    if (options.mtp_attention_window != 0 &&
+        (options.backend != SpeculativeBackend::Mtp ||
+         options.mtp_attention_window < options.draft_tokens + 1)) {
+        throw std::invalid_argument(
+            "--mtp-attention-window requires --spec mtp and at least --draft-tokens + 1 keys");
+    }
     switch (options.backend) {
     case SpeculativeBackend::None:
         if (options.draft_tokens != 0 || options.proposal_head != ProposalHead::Full) {

@@ -186,6 +186,10 @@ std::string usage_text(const char* argv0) {
            "  --spec mtp|dflash|dflash2     speculative decoding backend\n"
            "  --draft-tokens N              drafts per round, 1..15\n"
            "  --lm-head-draft               draft with the optimized proposal head\n"
+           "  --mtp-attention-window N      the MTP draft head attends to its first 64 keys\n"
+           "                                and the newest N before its query, not the\n"
+           "                                whole history; verification is unchanged\n"
+           "                                (default 0: whole history)\n"
            "  --ngram-draft-tokens 0..63    copy up to that many tokens per round from\n"
            "                                earlier prompt, tool-result or output text that\n"
            "                                the last --ngram-min-match tokens match,\n"
@@ -383,6 +387,9 @@ Options parse_options(int argc, char** argv) {
             options.prefill_a8 = false;
         } else if (arg == "--lookup-ngram") {
             options.speculative.lookup_ngram = parse_u32(value("--lookup-ngram"), "lookup-ngram");
+        } else if (arg == "--mtp-attention-window") {
+            options.speculative.mtp_attention_window =
+                parse_u32(value(arg), "mtp-attention-window", true);
         } else if (arg == "--prefill-cublas") {
             options.prefill_cublas = true;
         } else if (arg == "--no-prefill-cublas-projections") {

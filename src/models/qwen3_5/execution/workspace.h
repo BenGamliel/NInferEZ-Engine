@@ -204,6 +204,24 @@ MtpAttentionResultRoots mtp_attention_results(Allocator& allocator, const TextCo
     };
 }
 
+// --mtp-attention-window: the windowed table rows, table-row indices and positions the MTP draft
+// attention reads instead of the cache's own.
+struct PagedKVWindowRoots {
+    Tensor tables;
+    Tensor rows;
+    Tensor positions;
+};
+
+template <class Allocator>
+PagedKVWindowRoots paged_kv_window(Allocator& allocator, std::int32_t pages, std::int32_t width,
+                                   std::int32_t batch) {
+    return {
+        matrix(allocator, DType::I32, pages, batch),
+        vector(allocator, DType::I32, batch),
+        matrix(allocator, DType::I32, width, batch),
+    };
+}
+
 struct MtpPostAttentionRoots {
     Tensor output;
     Tensor post_mixer_hidden;

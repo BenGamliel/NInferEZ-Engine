@@ -948,6 +948,7 @@ int main() {
                                         "--media-preprocess-threads",
                                         "--min-p",
                                         "--mlp-a8-decode",
+                                        "--mtp-attention-window",
                                         "--model-id",
                                         "--mtp-experts-q4",
                                         "--ngram-archive-mib",
@@ -1258,6 +1259,29 @@ int main() {
                 } catch (const std::invalid_argument&) { rejected = true; }
                 const std::string message = std::string("--rope-scaling-factor accepted ") + bad;
                 failures += check(rejected, message.c_str());
+            }
+        }
+        {
+            failures += check(
+                parse({"ninfer-serve", "model.ninfer", "--spec", "mtp", "--draft-tokens", "3",
+                       "--mtp-attention-window", "4096"})
+                            .speculative.mtp_attention_window == 4096 &&
+                    parse({"ninfer-serve", "model.ninfer", "--spec", "mtp", "--draft-tokens", "3"})
+                            .speculative.mtp_attention_window == 0,
+                "--mtp-attention-window was not an off-by-default MTP option");
+            for (const std::vector<std::string>& bad :
+                 {std::vector<std::string>{"--mtp-attention-window", "4096"},
+                  std::vector<std::string>{"--spec", "mtp", "--draft-tokens", "5",
+                                           "--mtp-attention-window", "5"},
+                  std::vector<std::string>{"--spec", "dflash2", "--draft-tokens", "5",
+                                           "--mtp-attention-window", "4096"}}) {
+                std::vector<std::string> arguments{"ninfer-serve", "model.ninfer"};
+                arguments.insert(arguments.end(), bad.begin(), bad.end());
+                bool rejected = false;
+                try {
+                    (void)parse(std::move(arguments));
+                } catch (const std::invalid_argument&) { rejected = true; }
+                failures += check(rejected, "an invalid --mtp-attention-window was accepted");
             }
         }
         {

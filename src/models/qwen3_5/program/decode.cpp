@@ -381,11 +381,11 @@ void ProgramImpl::enqueue_dflash_context_append(std::span<const std::uint32_t> l
     ops::prepare_ragged_prefix(dflash->pending_features, active_lane_tensor, device_starts,
                                device_ends, features, positions, device_counts, device.stream);
 
-    execution::DFlashAppendContext state{{device, parameters, work, state_images->linear(0),
-                                          replay_records ? &*replay_records : nullptr, io,
-                                          prefill_hidden, prefill_chunk, proposal_head,
-                                          stage_runtime.get(), rope_yarn, fast_prefill_kernel},
-                                         *dflash};
+    execution::DFlashAppendContext state{
+        {device, parameters, work, state_images->linear(0),
+         replay_records ? &*replay_records : nullptr, io, prefill_hidden, prefill_chunk,
+         proposal_head, stage_runtime.get(), rope_yarn, fast_prefill_kernel, mtp_attention_window},
+        *dflash};
     mark_workspace_usage(workspace_plan.dflash_context);
     execution::dflash_append_context(state, features, positions, device_counts,
                                      state_destination_tensor, table_rows,
@@ -476,7 +476,8 @@ ProgramImpl::decode_ordinary_batch(std::span<const std::uint32_t> lanes,
         execution::OrdinaryBatchContext schedule_state{
             {device, parameters, work, state_images->linear(0),
              replay_records ? &*replay_records : nullptr, io, prefill_hidden, prefill_chunk,
-             proposal_head, stage_runtime.get(), rope_yarn, fast_prefill_kernel},
+             proposal_head, stage_runtime.get(), rope_yarn, fast_prefill_kernel,
+             mtp_attention_window},
             decoder->text_kv,
             *io.ordinary,
             *ordinary_host_ingress,
@@ -675,7 +676,8 @@ ProgramImpl::decode_mtp_batch(std::span<const std::uint32_t> lanes,
         execution::MtpBatchContext schedule_state{
             {device, parameters, work, state_images->linear(0),
              replay_records ? &*replay_records : nullptr, io, prefill_hidden, prefill_chunk,
-             proposal_head, stage_runtime.get(), rope_yarn, fast_prefill_kernel},
+             proposal_head, stage_runtime.get(), rope_yarn, fast_prefill_kernel,
+             mtp_attention_window},
             decoder->text_kv,
             *decoder->mtp_cache(),
             frame,
@@ -935,7 +937,8 @@ ProgramImpl::decode_dflash_batch(std::span<const std::uint32_t> lanes,
         execution::DFlashBatchContext schedule_state{
             {device, parameters, work, state_images->linear(0),
              replay_records ? &*replay_records : nullptr, io, prefill_hidden, prefill_chunk,
-             proposal_head, stage_runtime.get(), rope_yarn, fast_prefill_kernel},
+             proposal_head, stage_runtime.get(), rope_yarn, fast_prefill_kernel,
+             mtp_attention_window},
             decoder->text_kv,
             *dflash,
             *io.dflash_decode,
