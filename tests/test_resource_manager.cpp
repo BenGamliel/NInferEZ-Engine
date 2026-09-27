@@ -4029,6 +4029,51 @@ void test_stale_reclamation_leaves_residents_kept_by_admission_pressure() {
             "the resident kept by admission pressure was released");
 }
 
+// Under --recency-eviction the stale reclaim ranks residents by the owner recency the pressure path
+// uses, so an older publication that a later request reused outlives a newer one nobody reused.
+// The released checkpoints count as pressure drops like any other eviction.
+void test_stale_reclamation_ranks_by_recency_under_recency_eviction() {
+    FakeManager manager = make_manager(1, 4, 1);
+    FakeProgram program;
+    manager.enable_recency_eviction();
+    const FakeCacheSessionKey first_session{1};
+    const FakeCacheSessionKey second_session{2};
+    const ActiveRequest reused = start_active(
+        manager, program, 9, make_base(9, first_session, RetentionClass::LiveSession), 1);
+    (void)finish_active(manager, program, reused);
+    const ActiveRequest unused = start_active(manager, program, 391, make_base(391), 2);
+    (void)finish_active(manager, program, unused);
+    const ActiveRequest fork = start_active(
+        manager, program, 9, make_base(9, second_session, RetentionClass::LiveSession), 3);
+    require(program.started_source_mode == PrivateSourceMode::Retain,
+            "the reused continuation was consumed instead of retained");
+    (void)finish_active(manager, program, fork);
+
+    const ActiveRequest active             = start_active(manager, program, 392, make_base(392), 4);
+    program.capture_feasible_after_release = true;
+    program.capture_assessment             = FakeCaptureAssessment{
+        .shortlist_key          = FakeShortlistKey{.digest = 392, .frontier = 64},
+        .protected_rebuild_work = PrefillWork{.tokens = 64},
+        .publishes_private      = true,
+        .publishes_shared       = false,
+        .physically_feasible    = false,
+    };
+    RuntimeStats before;
+    manager.populate_runtime_stats(program, before);
+    const auto reserved =
+        manager.reserve_active_capture(program, active.lane, FakeCaptureOffer{.id = 76}, 0, {});
+    RuntimeStats after;
+    manager.populate_runtime_stats(program, after);
+    require(reserved == FakeManager::ActiveCaptureReserveResult::Reserved,
+            "recency-ranked stale reclamation did not reserve");
+    require(program.released_continuations.size() == 1 &&
+                program.released_continuations.front() == unused.sequence.id,
+            "stale reclamation ignored that a later request reused the older resident");
+    require(after.pressure_private_owners_evicted == before.pressure_private_owners_evicted + 1 &&
+                after.pressure_checkpoints_dropped > before.pressure_checkpoints_dropped,
+            "stale reclamation did not count the checkpoints it dropped");
+}
+
 void test_capture_result_is_validated_before_any_adoption() {
     FakeManager manager = make_manager(1, 4, 1);
     FakeProgram program;
@@ -5112,6 +5157,8 @@ int main() {
              test_stale_reclamation_does_not_run_when_the_capture_is_feasible);
     run_test("stale reclamation leaves residents kept by admission pressure",
              test_stale_reclamation_leaves_residents_kept_by_admission_pressure);
+    run_test("stale reclamation ranks by recency under recency eviction",
+             test_stale_reclamation_ranks_by_recency_under_recency_eviction);
     run_test("validate complete capture result before adoption",
              test_capture_result_is_validated_before_any_adoption);
     run_test("capture result owner identity", test_capture_result_is_adopted_by_owner_identity);

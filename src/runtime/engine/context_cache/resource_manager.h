@@ -2118,8 +2118,10 @@ private:
                entry.id == index.owner_id && entry.revision == index.revision;
     }
 
-    // Releases the oldest catalogued private continuation that no live request can reach.
-    // Ordering is by publication_order (oldest first), tie-broken by slot for determinism.
+    // Releases the oldest catalogued private continuation that no live request can reach, by
+    // publication_order, or under --recency-eviction by the owner recency the pressure path ranks
+    // with, so a resident a later request reused outlives a newer one nobody did. Ties break by
+    // slot for determinism.
     [[nodiscard]] bool reclaim_stale_private_resident(Program& program, LaneId lane) {
         const ActiveEntry& active = active_[lane.value];
         std::uint32_t victim      = kInvalidCatalogSlot;
@@ -2135,13 +2137,16 @@ private:
             if (active.retained_private_source && active.retained_private_source->slot == slot) {
                 continue;
             }
-            if (entry.publication_order < oldest) {
-                oldest = entry.publication_order;
+            const std::uint64_t age =
+                recency_eviction_ ? owner_recency_epoch(entry) : entry.publication_order;
+            if (age < oldest) {
+                oldest = age;
                 victim = slot;
             }
         }
         if (victim == kInvalidCatalogSlot) { return false; }
-        CatalogEntry& entry = catalog_[victim];
+        CatalogEntry& entry             = catalog_[victim];
+        const std::uint32_t checkpoints = continuation_checkpoint_count(entry.summary);
         if (program.release_continuation(std::move(*entry.handle)).status !=
             ConsumeStatus::Consumed) {
             return false;
@@ -2150,6 +2155,7 @@ private:
         clear_catalog_entry(entry);
         rebuild_prefix_index();
         saturating_increment(context_stats_.pressure_private_owners_evicted);
+        record_checkpoint_drops(context_stats_, checkpoints);
         return true;
     }
 
