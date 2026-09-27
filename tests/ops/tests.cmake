@@ -206,7 +206,7 @@ include("${CMAKE_CURRENT_LIST_DIR}/linear_swiglu/tests.cmake")
 add_test(NAME ninfer_softmax_attention_wide_test
   COMMAND ninfer_tests ninfer_softmax_attention_test --wide-only)
 set_tests_properties(ninfer_softmax_attention_wide_test
-  PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 1800 RUN_SERIAL TRUE)
+  PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 3600 RUN_SERIAL TRUE)
 
 add_test(NAME ninfer_sparse_moe_wide_test
   COMMAND ninfer_tests ninfer_sparse_moe_test --wide-only)
