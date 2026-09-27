@@ -301,9 +301,22 @@ Json arena_json(const ninfer::ArenaMemorySummary& arena) {
                 {"peak_used_bytes", arena.peak_used_bytes}};
 }
 
+const char* vision_residency_name(ninfer::VisionResidency residency) {
+    switch (residency) {
+    case ninfer::VisionResidency::Resident:
+        return "resident";
+    case ninfer::VisionResidency::Overlay:
+        return "overlay";
+    case ninfer::VisionResidency::Cpu:
+        return "cpu";
+    }
+    return "unknown";
+}
+
 Json vision_workspace_json(const std::optional<ninfer::VisionWorkspaceMemorySummary>& vision) {
     if (!vision) { return nullptr; }
-    return Json{{"aggregate_prompt_tokens", vision->aggregate_prompt_tokens},
+    return Json{{"residency", vision_residency_name(vision->residency)},
+                {"aggregate_prompt_tokens", vision->aggregate_prompt_tokens},
                 {"max_item_tokens", vision->max_item_tokens},
                 {"general_capacity_bytes", vision->general_capacity_bytes},
                 {"encode_peak_bytes", vision->encode_peak_bytes},

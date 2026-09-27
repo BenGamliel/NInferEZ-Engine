@@ -273,10 +273,13 @@ std::string serve_usage_text(const char* argv0) {
            "VISION (off by default)\n"
            "  --vision                      accept images and video and load the Vision GPU\n"
            "                                allocations\n"
-           "  --vision-residency resident|overlay\n"
+           "  --vision-residency resident|overlay|cpu\n"
            "                                overlay keeps the Vision tower in host memory\n"
-           "                                and borrows device memory per image; alias\n"
-           "                                --vision-offload\n"
+           "                                and borrows device memory per image (alias\n"
+           "                                --vision-offload); cpu runs it on CPU threads\n"
+           "                                with no device Vision memory, and caps\n"
+           "                                --vision-max-merged at 256 unless given\n"
+           "  --vision-cpu                  --vision with --vision-residency cpu\n"
            "  --vision-max-merged N         merged tokens of one media item, 64..16384\n"
            "                                (default 16384); larger media is downscaled\n"
            "  --media-cache-mib N           retained prepared media (default 1024; 0\n"
@@ -441,6 +444,7 @@ ServeOptions parse_serve_options(int argc, char** argv) {
     bool host_cache_budget_explicit   = false;
     bool long_anchor_spacing_explicit = false;
     bool ngram_width_explicit         = false;
+    bool vision_max_merged_explicit   = false;
     std::optional<std::size_t> kv_headroom_mib;
     // Last flag seen that belongs to only one prefix-cache mode, for the cross-mode error.
     const char* legacy_cache_flag  = nullptr;
@@ -794,9 +798,15 @@ ServeOptions parse_serve_options(int argc, char** argv) {
                 options.vision_residency = VisionResidency::Resident;
             } else if (mode == "overlay") {
                 options.vision_residency = VisionResidency::Overlay;
+            } else if (mode == "cpu") {
+                options.vision_residency = VisionResidency::Cpu;
             } else {
-                throw std::invalid_argument("--vision-residency must be resident or overlay");
+                throw std::invalid_argument("--vision-residency must be resident, overlay or cpu");
             }
+        } else if (arg == "--vision-cpu") {
+            // The gzenz fork's switch for Vision on CPU threads.
+            options.enable_vision    = true;
+            options.vision_residency = VisionResidency::Cpu;
         } else if (arg == "--vision-offload") {
             // The Wallawalla47 fork's switch for the same overlay residency.
             const std::string_view mode = require_value("--vision-offload");
@@ -814,6 +824,7 @@ ServeOptions parse_serve_options(int argc, char** argv) {
                 throw std::invalid_argument("--vision-max-merged must be in [64, 16384]");
             }
             options.vision_max_merged_tokens = static_cast<std::uint32_t>(merged);
+            vision_max_merged_explicit       = true;
         } else if (arg == "--no-cuda-graph") {
             options.use_cuda_graph = false;
         } else if (arg == "--cuda-graph-allowance-mib") {
@@ -1048,8 +1059,13 @@ ServeOptions parse_serve_options(int argc, char** argv) {
     }
     product::apply_default_ngram_draft_tokens(options.speculative, ngram_width_explicit);
     product::validate_speculative_cli_options(options.speculative);
-    if (options.vision_residency == VisionResidency::Overlay && !options.enable_vision) {
-        throw std::invalid_argument("--vision-residency overlay requires --vision");
+    if (options.vision_residency != VisionResidency::Resident && !options.enable_vision) {
+        throw std::invalid_argument("--vision-residency overlay or cpu requires --vision");
+    }
+    // A CPU encode grows with the square of an item's patches: 256 merged tokens (about 512x512
+    // pixels) keeps one to a few seconds.
+    if (options.vision_residency == VisionResidency::Cpu && !vision_max_merged_explicit) {
+        options.vision_max_merged_tokens = 256;
     }
     if (options.enable_thinking == false && options.default_reasoning_effort &&
         *options.default_reasoning_effort != RequestedReasoningEffort::None) {

@@ -6,6 +6,7 @@
 #include "core/device.h"
 #include "core/tensor.h"
 #include "core/weight.h"
+#include "models/qwen3_5/execution/vision_cpu.h"
 #include "models/qwen3_5/execution/vision_overlay.h"
 #include "models/qwen3_5/program/vision_control.h"
 #include "models/qwen3_5/program/planning/startup.h"
@@ -62,6 +63,11 @@ private:
     cudaStream_t stream_ = nullptr;
 };
 
+// CPU residency: no device encode scratch; the plan carries the merged-embedding extent a host
+// result may reach.
+[[nodiscard]] VisionWorkspacePlan plan_cpu_vision_workspace(std::int32_t output_hidden,
+                                                            std::uint32_t max_merged_tokens);
+
 struct VisionChunk {
     std::int32_t length                       = 0;
     const qwen3_5::VisionItemControl* control = nullptr;
@@ -84,6 +90,12 @@ public:
                          qwen3_5::PreparedPromptData& prompt, const VisionPrefillPlan& plan,
                          std::size_t& handoff_peak_bytes, VisionResidencyBroker& broker,
                          PinnedResultPool::Handle result, DeviceSpan bridge_staging);
+    // CPU residency: items are encoded on CPU threads, the next one beside other lanes' decode, and
+    // staged from host memory like overlay results.
+    VisionPrefillSession(DeviceContext& device, const execution::Parameters& parameters,
+                         const VisionWorkspacePlan& cpu_plan, qwen3_5::PreparedPromptData& prompt,
+                         const VisionPrefillPlan& plan, std::size_t& handoff_peak_bytes,
+                         DeviceSpan bridge_staging);
     ~VisionPrefillSession();
 
     [[nodiscard]] VisionChunk prepare_chunk(std::uint32_t begin, std::uint32_t nominal_length);
@@ -106,6 +118,7 @@ public:
 
 private:
     void validate_plan() const;
+    void submit_cpu_item(std::size_t use_index);
 
     DeviceContext& device_;
     const execution::Parameters& parameters_;
@@ -116,11 +129,15 @@ private:
     std::size_t& handoff_peak_bytes_;
     std::optional<VisionContext> context_;
     std::unique_ptr<VisionOverlaySession> overlay_;
+    std::unique_ptr<CpuVisionSession> cpu_;
     DeviceSpan bridge_staging_;
     std::span<const std::byte> host_result_;
     std::size_t next_use_ = 0;
     std::optional<std::uint32_t> active_item_;
     std::optional<std::uint32_t> submitted_item_;
+    // End of the last prepared chunk and of the active item's span, for the CPU look-ahead.
+    std::uint32_t prepared_end_       = 0;
+    std::uint32_t active_use_end_     = 0;
     std::size_t active_handoff_bytes_ = 0;
     std::vector<std::uint32_t> encoded_payloads_pending_release_;
     std::vector<CudaEventTimer> timers_;

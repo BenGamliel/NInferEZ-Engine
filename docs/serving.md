@@ -110,6 +110,18 @@ item's merged tokens (media above it is downscaled at preprocessing) and sizes t
 request log line reports `overlay=<windows>x<conc|excl|mixed> <ms> (evict <MiB> <ms>, restore <ms>,
 staged <MiB>)` and the JSON record carries `vision_overlay`, including `exclusive_windows`.
 
+`--vision-residency cpu` (or `--vision-cpu`, which also sets `--vision`) keeps no Vision memory on
+the device at all: the tower is decoded to FP32 host memory at load (about 1.7 GiB for the Qwen3.6
+tower) and each image is encoded on CPU threads, then uploaded a chunk's columns at a time like an
+overlay result. The encode of the next image runs beside other lanes' decode, and the lane that
+owns it yields its prefill units until it completes, but it is slow: on a 12-core desktop CPU a
+512x512 image takes seconds, and the cost grows with the square of the patches, so this residency
+caps `--vision-max-merged` at 256 unless it is given. One encode runs at a time across the process.
+The CPU encoder computes in FP32 where the device encoder rounds activations to BF16, so embeddings
+agree closely but not bit for bit. It reads the tower's weights in the official artifacts' grouped
+formats as well as BF16, FP8 and NVFP4; a projection stored with a Hadamard rotation or an input
+gather is refused at load.
+
 ## Structured output
 
 NInfer uses the vendored XGrammar v0.2.7 C++ compiler and token matcher to constrain final
@@ -1199,7 +1211,8 @@ The table lists executable defaults. The startup example selects a long-context 
 | `--thinking-budget-message TEXT` | message a thinking-enabled request receives at its thinking budget instead of the built-in notice; the canonical `</think>` close is appended when missing | built-in |
 | `--default-reasoning-effort E` | effort for requests that name none: `none`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max` | unset |
 | `--vision` | enable media input and load Vision GPU allocations | off |
-| `--vision-residency resident\|overlay` | `overlay` keeps the Vision tower in pinned host memory and encodes each image inside a window borrowed from the evict-ranked text weight tail, so `--vision` no longer reserves device memory and `--kv-capacity auto` resolves the no-vision capacity; requires `--vision` and CUDA virtual memory management. `--vision-offload on\|off` is accepted as an alias for `overlay\|resident` | `resident` |
+| `--vision-residency resident\|overlay\|cpu` | `overlay` keeps the Vision tower in pinned host memory and encodes each image inside a window borrowed from the evict-ranked text weight tail, so `--vision` no longer reserves device memory and `--kv-capacity auto` resolves the no-vision capacity; requires `--vision` and CUDA virtual memory management. `--vision-offload on\|off` is accepted as an alias for `overlay\|resident`. `cpu` decodes the tower to host FP32 and encodes on CPU threads with no device Vision memory (see [Vision residency](#vision-residency)); it caps `--vision-max-merged` at 256 unless given | `resident` |
+| `--vision-cpu` | `--vision` with `--vision-residency cpu` | off |
 | `--vision-max-merged N` | merged-token budget of one media item, `[64, 16384]`; larger images and video frame pairs are downscaled at preprocessing instead of being rejected, and the overlay window is sized for it | 16384 |
 | `--no-cuda-graph` | disable CUDA Graph decode | graphs on |
 | `--cuda-graph-allowance-mib N` | total CUDA Graph driver-state allowance in MiB, subtracted from the KV sizing budget | computed |
@@ -1388,9 +1401,10 @@ bytes, `total_bytes` as the whole archive's bytes, and `sampling_seed` as the ef
 request-domain separation for a request that named a session, otherwise `null`.
 
 For `server_start.memory`, `workspace.capacity_bytes` is the only physical workspace allocation.
-When Vision is enabled, `vision_workspace` reports the aggregate prompt and maximum-item token
-bounds plus encode peak and handoff layout/usage within that same allocation; these bytes must not
-be added to `workspace.capacity_bytes`. The field is `null` when Vision is disabled.
+When Vision is enabled, `vision_workspace` reports the `residency` (`resident`, `overlay` or `cpu`),
+the aggregate prompt and maximum-item token bounds plus encode peak and handoff layout/usage within
+that same allocation; these bytes must not be added to `workspace.capacity_bytes`. The field is
+`null` when Vision is disabled.
 `cuda_graph_allowance_bytes` is the CUDA Graph memory the KV sizing reserved, and
 `cuda_graph_measured_bytes` the Device memory graph preparation actually took at startup (`0`
 without CUDA Graphs); the startup log warns when the second exceeds the first.

@@ -430,6 +430,18 @@ void VisionContext::encode(const VisionItemView& item, Tensor& output, DeviceSpa
     }
 }
 
+VisionWorkspacePlan plan_cpu_vision_workspace(std::int32_t output_hidden,
+                                              std::uint32_t max_merged_tokens) {
+    if (output_hidden <= 0 || max_merged_tokens == 0) {
+        throw std::invalid_argument("CPU Vision workspace extents must be positive");
+    }
+    VisionWorkspacePlan out;
+    out.output_hidden          = output_hidden;
+    out.max_merged_tokens      = max_merged_tokens;
+    out.handoff_capacity_bytes = output_handoff_bytes(output_hidden, max_merged_tokens);
+    return out;
+}
+
 VisionPrefillSession::VisionPrefillSession(
     DeviceContext& device, const execution::Parameters& parameters, DeviceSpan workspace,
     const VisionWorkspacePlan& workspace_plan, qwen3_5::PreparedPromptData& prompt,
@@ -460,6 +472,22 @@ VisionPrefillSession::VisionPrefillSession(
         static_cast<std::size_t>(parameters.vision.value().merger_fc2.weight.n) * 2;
     if (bridge_staging_.data == nullptr || bridge_staging_.bytes < column_bytes) {
         throw std::invalid_argument("Vision overlay bridge staging is too small");
+    }
+    validate_plan();
+    encoded_payloads_pending_release_.reserve(plan_.uses.size());
+}
+
+VisionPrefillSession::VisionPrefillSession(
+    DeviceContext& device, const execution::Parameters& parameters,
+    const VisionWorkspacePlan& cpu_plan, qwen3_5::PreparedPromptData& prompt,
+    const VisionPrefillPlan& plan, std::size_t& handoff_peak_bytes, DeviceSpan bridge_staging)
+    : device_(device), parameters_(parameters), workspace_{}, workspace_plan_(cpu_plan),
+      prompt_(prompt), plan_(plan), handoff_peak_bytes_(handoff_peak_bytes),
+      bridge_staging_(bridge_staging) {
+    cpu_ = std::make_unique<CpuVisionSession>(parameters.model.cpu_vision());
+    const std::size_t column_bytes = static_cast<std::size_t>(cpu_plan.output_hidden) * 2;
+    if (bridge_staging_.data == nullptr || bridge_staging_.bytes < column_bytes) {
+        throw std::invalid_argument("CPU Vision bridge staging is too small");
     }
     validate_plan();
     encoded_payloads_pending_release_.reserve(plan_.uses.size());
@@ -547,20 +575,26 @@ VisionChunk VisionPrefillSession::prepare_chunk(std::uint32_t begin, std::uint32
         }
     }
     if (end <= begin) { throw std::logic_error("Vision chunk cap made no forward progress"); }
+    prepared_end_ = end;
     if (active == nullptr) {
         return VisionChunk{static_cast<std::int32_t>(end - begin), nullptr, {}};
     }
     const qwen3_5::VisionItemControl& control = plan_.control->items[active->control_index];
-    if (overlay_ != nullptr) {
+    if (overlay_ != nullptr || cpu_ != nullptr) {
         if (!active_item_ || *active_item_ != active->prepared_item_index) {
             if (submitted_item_ && *submitted_item_ == active->prepared_item_index) {
                 // Submitted ahead of this unit: the encode already ran beside other lanes.
-                host_result_ = overlay_->complete_item();
+                host_result_ =
+                    overlay_ != nullptr ? overlay_->complete_item() : cpu_->complete_item();
                 submitted_item_.reset();
             } else {
                 const auto& payload = prompt_.media_payloads[active->prepared_item_index];
-                host_result_        = overlay_->encode_item(payload->span(), control);
+                host_result_ = overlay_ != nullptr ? overlay_->encode_item(payload->span(), control)
+                                                   : cpu_->encode_item(payload, control);
             }
+            active_use_end_ = active->end;
+            // The following item encodes on CPU threads while this one's chunks prefill.
+            if (cpu_ != nullptr) { submit_cpu_item(next_use_ + 1U); }
             active_item_ = active->prepared_item_index;
             encoded_payloads_pending_release_.push_back(active->prepared_item_index);
         }
@@ -588,7 +622,7 @@ Tensor VisionPrefillSession::bridge_column(const VisionChunk& chunk, std::int32_
         static_cast<std::size_t>(column) >= chunk.control->merged_count) {
         throw std::logic_error("Vision bridge column is outside the encoded item");
     }
-    if (overlay_ == nullptr) { return chunk.embeddings.slice(1, column, 1); }
+    if (overlay_ == nullptr && cpu_ == nullptr) { return chunk.embeddings.slice(1, column, 1); }
     const std::int32_t hidden      = workspace_plan_.output_hidden;
     const std::size_t column_bytes = static_cast<std::size_t>(hidden) * 2;
     const std::size_t offset       = static_cast<std::size_t>(column) * column_bytes;
@@ -602,6 +636,10 @@ Tensor VisionPrefillSession::bridge_column(const VisionChunk& chunk, std::int32_
 }
 
 void VisionPrefillSession::submit_next_item() {
+    if (cpu_ != nullptr) {
+        submit_cpu_item(active_item_ ? next_use_ + 1U : next_use_);
+        return;
+    }
     // One pinned result slot per session: an item may be submitted only while no other item's
     // embeddings are still being consumed by the prefill.
     if (overlay_ == nullptr || overlay_->pending() || active_item_ ||
@@ -616,7 +654,21 @@ void VisionPrefillSession::submit_next_item() {
     }
 }
 
+void VisionPrefillSession::submit_cpu_item(std::size_t use_index) {
+    if (cpu_->pending() || use_index >= plan_.uses.size()) { return; }
+    const VisionUseSpan& use = plan_.uses[use_index];
+    const auto& payload      = prompt_.media_payloads[use.prepared_item_index];
+    if (!payload || (active_item_ && *active_item_ == use.prepared_item_index)) { return; }
+    cpu_->submit_item(payload, plan_.control->items[use.control_index]);
+    submitted_item_ = use.prepared_item_index;
+}
+
 bool VisionPrefillSession::vision_pending() const {
+    // A CPU item encoding ahead holds the lane back only once the active item's chunks are done.
+    if (cpu_ != nullptr) {
+        return cpu_->pending() && !cpu_->item_ready() &&
+               (!active_item_ || prepared_end_ >= active_use_end_);
+    }
     return overlay_ != nullptr && overlay_->pending() && !overlay_->item_ready();
 }
 
@@ -640,6 +692,7 @@ void VisionPrefillSession::retire_handoff() noexcept {
 
 double VisionPrefillSession::elapsed_seconds() const {
     if (overlay_ != nullptr) { return overlay_->stats().window_seconds; }
+    if (cpu_ != nullptr) { return cpu_->encode_seconds(); }
     double milliseconds = 0.0;
     for (const CudaEventTimer& timer : timers_) { milliseconds += timer.elapsed_ms(); }
     return milliseconds / 1000.0;

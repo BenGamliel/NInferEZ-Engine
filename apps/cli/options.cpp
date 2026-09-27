@@ -253,10 +253,13 @@ std::string usage_text(const char* argv0) {
            "VISION (off by default)\n"
            "  --vision                      accept images and video and load the Vision GPU\n"
            "                                allocations\n"
-           "  --vision-residency resident|overlay\n"
+           "  --vision-residency resident|overlay|cpu\n"
            "                                overlay keeps the Vision tower in host memory\n"
-           "                                and borrows device memory per image; alias\n"
-           "                                --vision-offload\n"
+           "                                and borrows device memory per image (alias\n"
+           "                                --vision-offload); cpu runs it on CPU threads\n"
+           "                                with no device Vision memory, and caps\n"
+           "                                --vision-max-merged at 256 unless given\n"
+           "  --vision-cpu                  --vision with --vision-residency cpu\n"
            "  --vision-max-merged N         merged tokens of one media item (default 16384);\n"
            "                                larger media is downscaled\n"
            "\n"
@@ -282,7 +285,8 @@ Options parse_options(int argc, char** argv) {
     options.artifact_path     = argv[1];
     bool kv_capacity_explicit = false;
     bool device_explicit      = false;
-    bool ngram_width_explicit = false;
+    bool ngram_width_explicit       = false;
+    bool vision_max_merged_explicit = false;
     std::optional<std::size_t> kv_headroom_mib;
 
     for (int i = 2; i < argc; ++i) {
@@ -401,9 +405,15 @@ Options parse_options(int argc, char** argv) {
                 options.vision_residency = VisionResidency::Resident;
             } else if (mode == "overlay") {
                 options.vision_residency = VisionResidency::Overlay;
+            } else if (mode == "cpu") {
+                options.vision_residency = VisionResidency::Cpu;
             } else {
-                throw std::invalid_argument("--vision-residency must be resident or overlay");
+                throw std::invalid_argument("--vision-residency must be resident, overlay or cpu");
             }
+        } else if (arg == "--vision-cpu") {
+            // The gzenz fork's switch for Vision on CPU threads.
+            options.enable_vision    = true;
+            options.vision_residency = VisionResidency::Cpu;
         } else if (arg == "--vision-offload") {
             // The Wallawalla47 fork's switch for the same overlay residency.
             const std::string_view mode = value(arg);
@@ -416,6 +426,7 @@ Options parse_options(int argc, char** argv) {
             }
         } else if (arg == "--vision-max-merged") {
             options.vision_max_merged_tokens = parse_u32(value(arg), "vision-max-merged");
+            vision_max_merged_explicit       = true;
             if (options.vision_max_merged_tokens < 64 || options.vision_max_merged_tokens > 16384) {
                 throw std::invalid_argument("--vision-max-merged must be in [64, 16384]");
             }
@@ -493,8 +504,13 @@ Options parse_options(int argc, char** argv) {
     }
     product::apply_default_ngram_draft_tokens(options.speculative, ngram_width_explicit);
     product::validate_speculative_cli_options(options.speculative);
-    if (options.vision_residency == VisionResidency::Overlay && !options.enable_vision) {
-        throw std::invalid_argument("--vision-residency overlay requires --vision");
+    if (options.vision_residency != VisionResidency::Resident && !options.enable_vision) {
+        throw std::invalid_argument("--vision-residency overlay or cpu requires --vision");
+    }
+    // A CPU encode grows with the square of an item's patches: 256 merged tokens (about 512x512
+    // pixels) keeps one to a few seconds.
+    if (options.vision_residency == VisionResidency::Cpu && !vision_max_merged_explicit) {
+        options.vision_max_merged_tokens = 256;
     }
     if (options.structured_output.kind != StructuredOutputKind::None) {
         if (options.raw_output || !options.stop_strings.empty() ||

@@ -991,6 +991,7 @@ int main() {
                                         "--use-original-prefix-caching",
                                         "--value-aware-demote",
                                         "--vision",
+                                        "--vision-cpu",
                                         "--vision-max-merged",
                                         "--vision-offload",
                                         "--vision-residency",
@@ -1182,6 +1183,24 @@ int main() {
             (void)parse({"ninfer-serve", "model.ninfer", "--vision", "--vision-offload", "yes"});
         } catch (const std::invalid_argument&) { offload_mode_rejected = true; }
         failures += check(offload_mode_rejected, "--vision-offload yes was accepted");
+        const ServeOptions cpu =
+            parse({"ninfer-serve", "model.ninfer", "--vision", "--vision-residency", "cpu"});
+        failures += check(cpu.vision_residency == ninfer::VisionResidency::Cpu &&
+                              cpu.vision_max_merged_tokens == 256U,
+                          "--vision-residency cpu did not select CPU residency at 256 tokens");
+        const ServeOptions cpu_alias =
+            parse({"ninfer-serve", "model.ninfer", "--vision-cpu", "--vision-max-merged", "1024"});
+        failures += check(cpu_alias.enable_vision &&
+                              cpu_alias.vision_residency == ninfer::VisionResidency::Cpu &&
+                              cpu_alias.vision_max_merged_tokens == 1024U,
+                          "--vision-cpu is not --vision with CPU residency, or it overrode an "
+                          "explicit --vision-max-merged");
+        bool cpu_without_vision_rejected = false;
+        try {
+            (void)parse({"ninfer-serve", "model.ninfer", "--vision-residency", "cpu"});
+        } catch (const std::invalid_argument&) { cpu_without_vision_rejected = true; }
+        failures += check(cpu_without_vision_rejected,
+                          "--vision-residency cpu without --vision was accepted");
         failures += check(parse({"ninfer-serve", "model.ninfer", "--concurrent-prefill"})
                                   .concurrent_prefill &&
                               !parse({"ninfer-serve", "model.ninfer"}).concurrent_prefill,

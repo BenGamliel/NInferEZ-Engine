@@ -355,7 +355,16 @@ ProgramImpl::reserve_materialization(AdmissionCandidate&& plan, PreparedPromptDa
             if (!workspace_plan.vision) {
                 throw std::logic_error("Vision prefill has no startup workspace plan");
             }
-            if (vision_broker) {
+            if (parameters.model.cpu_vision()) {
+                request.prefill->vision = std::make_unique<execution::VisionPrefillSession>(
+                    device, parameters, *workspace_plan.vision, request.prefill->prompt,
+                    *request.prefill->vision_plan, vision_handoff_peak_bytes,
+                    DeviceSpan{static_cast<std::byte*>(workspace_storage.base()) +
+                                   workspace_plan.vision_bridge_offset,
+                               workspace_plan.vision_bridge_bytes});
+                // The first item starts encoding on CPU threads while other lanes decode.
+                request.prefill->vision->submit_next_item();
+            } else if (vision_broker) {
                 request.prefill->vision = std::make_unique<execution::VisionPrefillSession>(
                     device, parameters, *workspace_plan.vision, request.prefill->prompt,
                     *request.prefill->vision_plan, vision_handoff_peak_bytes, *vision_broker,

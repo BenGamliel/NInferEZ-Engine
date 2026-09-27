@@ -408,7 +408,7 @@ WorkspacePlan build_workspace_plan(const SequencePlanImpl& plan) {
     const auto text_common_root = [&](WorkspaceLayoutBuilder& layout, std::int32_t tokens) {
         (void)workspace::text_prefill_roots(layout, config, tokens, plan.features.vision ? 3 : 0,
                                             plan.features.vision ? tokens : 0,
-                                            plan.features.overlay_vision());
+                                            plan.features.host_staged_vision());
     };
     const auto linear_scratch = [&](WorkspaceLayoutBuilder& layout,
                                     const execution::LinearParameters& p, int first, int last) {
@@ -880,9 +880,14 @@ WorkspacePlan build_workspace_plan(const SequencePlanImpl& plan) {
     out.capacity = out.general_capacity;
     if (plan.features.vision) {
         const std::uint32_t merged = vision_item_token_bound(plan.capacity, plan.features);
-        if (plan.features.overlay_vision()) {
-            out.vision_resident      = false;
-            out.vision               = execution::plan_vision_window_workspace(parameters, merged);
+        if (plan.features.host_staged_vision()) {
+            out.vision_resident = false;
+            out.vision =
+                plan.features.cpu_vision()
+                    ? execution::plan_cpu_vision_workspace(
+                          static_cast<std::int32_t>(parameters.model.config().text.hidden_size),
+                          merged)
+                    : execution::plan_vision_window_workspace(parameters, merged);
             out.vision_bridge_offset = checked_add(out.general_capacity, 255, "bridge offset") &
                                        ~std::size_t{255};
             out.vision_bridge_bytes =

@@ -336,6 +336,7 @@ struct ContextCostOptions {
 enum class VisionResidency : std::uint8_t {
     Resident, // fixed Vision GPU allocations for the process lifetime
     Overlay,  // tower host-pinned; each image borrows device memory inside a bounded window
+    Cpu,      // tower decoded to FP32 host memory and run on CPU threads; no device Vision memory
 };
 
 struct EngineOptions {

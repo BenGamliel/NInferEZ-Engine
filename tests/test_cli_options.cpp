@@ -104,6 +104,14 @@ int run_tests() {
                              "--vision-offload", "on"})
                               .vision_residency == ninfer::VisionResidency::Overlay,
                       "--vision-offload on is not an alias of overlay residency");
+    {
+        const ninfer::cli::Options cpu =
+            parse({"ninfer-cli", "model.ninfer", "--prompt", "x", "--vision-cpu"});
+        failures +=
+            check(cpu.enable_vision && cpu.vision_residency == ninfer::VisionResidency::Cpu &&
+                      cpu.vision_max_merged_tokens == 256U,
+                  "--vision-cpu did not select CPU residency at 256 merged tokens");
+    }
     failures += check(rejects([] {
                           (void)parse({"ninfer-cli", "model.ninfer", "--prompt", "x", "--vision",
                                        "--vision-offload", "maybe"});

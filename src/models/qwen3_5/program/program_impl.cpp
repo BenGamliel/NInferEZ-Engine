@@ -200,7 +200,7 @@ ProgramImpl::ProgramImpl(const execution::Parameters& parameters_in, const Seque
         workspace_plan.vision.has_value() != vision_enabled ||
         causal_scoring != plan.persistent.score_hidden.has_value() ||
         causal_scoring != (workspace_plan.causal_score != 0) ||
-        workspace_plan.vision_resident == plan.features.overlay_vision() ||
+        workspace_plan.vision_resident == plan.features.host_staged_vision() ||
         (workspace_plan.vision && workspace_plan.vision_resident &&
          workspace_plan.vision->general_capacity_bytes != workspace_plan.general_capacity)) {
         throw std::invalid_argument("Qwen3.5 workspace plan does not match startup features");
@@ -787,8 +787,10 @@ MemorySummary ProgramImpl::memory_summary() const noexcept {
             .handoff_capacity_bytes = workspace_plan.vision->handoff_capacity_bytes,
             .handoff_active_bytes   = active_handoff_bytes,
             .handoff_peak_bytes     = vision_handoff_peak_bytes,
-            .residency              = workspace_plan.vision_resident ? VisionResidency::Resident
-                                                                     : VisionResidency::Overlay,
+            .residency = parameters.model.cpu_vision()
+                             ? VisionResidency::Cpu
+                             : (workspace_plan.vision_resident ? VisionResidency::Resident
+                                                               : VisionResidency::Overlay),
         };
         if (const EvictableWeightPool* const pool = parameters.model.weight_pool();
             !workspace_plan.vision_resident && pool != nullptr) {

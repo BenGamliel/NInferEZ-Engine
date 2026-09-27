@@ -14,6 +14,8 @@
 
 namespace ninfer::models::qwen3_5 {
 
+struct CpuVisionWeights;
+
 struct InstanceInfo {
     std::string name;
     std::string metadata_json;
@@ -71,12 +73,18 @@ public:
         return backing_.weight_pool();
     }
 
+    // CPU Vision residency only: the tower decoded to host FP32, shared with every encode session.
+    [[nodiscard]] const std::shared_ptr<const CpuVisionWeights>& cpu_vision() const noexcept {
+        return cpu_vision_;
+    }
+
 private:
     friend std::unique_ptr<Model> materialize_model(LoadPlan&&, DeviceContext&,
                                                     const StartupObserver*);
     Model(Config config, LoadOptions options, ModelWeights weights, std::vector<BoundWeight> bound,
           FrontendResources resources, InstanceInfo info, artifact::MaterializedArtifact backing,
-          std::optional<VisionOverlayLayout> vision_overlay);
+          std::optional<VisionOverlayLayout> vision_overlay,
+          std::shared_ptr<const CpuVisionWeights> cpu_vision);
 
     // Destroy all borrowers before backing. The caller keeps DeviceContext alive through cleanup.
     artifact::MaterializedArtifact backing_;
@@ -87,6 +95,7 @@ private:
     FrontendResources resources_;
     InstanceInfo info_;
     std::optional<VisionOverlayLayout> vision_overlay_;
+    std::shared_ptr<const CpuVisionWeights> cpu_vision_;
 };
 
 } // namespace ninfer::models::qwen3_5

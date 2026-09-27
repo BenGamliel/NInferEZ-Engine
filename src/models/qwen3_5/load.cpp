@@ -7,6 +7,7 @@
 #include "core/paged_kv_storage.h"
 #include "core/stage_plan.h"
 #include "models/qwen3_5/load/bindings.h"
+#include "models/qwen3_5/load/vision_cpu.h"
 
 #include <algorithm>
 #include <stdexcept>
@@ -22,6 +23,7 @@ struct LoadPlan::Impl {
     artifact::MaterializationPlan materialization;
     FrontendResources resources;
     InstanceInfo info;
+    std::shared_ptr<const CpuVisionWeights> cpu_vision;
 };
 
 LoadPlan::LoadPlan(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
@@ -70,7 +72,12 @@ LoadPlan plan_load(const artifact::Reader& reader, LoadOptions options) {
     if (options.overlay_vision() && !out->config.vision) {
         throw std::invalid_argument("--vision-residency overlay requires a Vision artifact");
     }
-    if (out->config.vision) {
+    if (options.cpu_vision() && !out->config.vision) {
+        throw std::invalid_argument("--vision-residency cpu requires a Vision artifact");
+    }
+    if (options.cpu_vision()) {
+        out->cpu_vision = loading::load_cpu_vision(binder, *out->config.vision, text);
+    } else if (out->config.vision) {
         out->weights.vision = loading::bind_vision(
             bindings, *out->config.vision, text,
             options.overlay_vision() ? artifact::Residency::Pinned : artifact::Residency::Device);
@@ -265,10 +272,10 @@ std::unique_ptr<Model> materialize_model(LoadPlan&& plan, DeviceContext& device,
         vision_overlay =
             loading::vision_overlay_layout(*data->weights.vision, bound, backing.pinned_block());
     }
-    return std::unique_ptr<Model>(new Model(
-        std::move(data->config), data->options, std::move(data->weights), std::move(bound),
-        std::move(data->resources), std::move(data->info), std::move(backing),
-        std::move(vision_overlay)));
+    return std::unique_ptr<Model>(
+        new Model(std::move(data->config), data->options, std::move(data->weights),
+                  std::move(bound), std::move(data->resources), std::move(data->info),
+                  std::move(backing), std::move(vision_overlay), std::move(data->cpu_vision)));
 }
 
 std::unique_ptr<Model> load_model(const std::filesystem::path& path, LoadOptions options,

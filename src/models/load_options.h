@@ -59,6 +59,15 @@ struct LoadOptions {
         return vision && vision_residency == VisionResidency::Overlay;
     }
 
+    [[nodiscard]] bool cpu_vision() const noexcept {
+        return vision && vision_residency == VisionResidency::Cpu;
+    }
+
+    // The tower's embeddings reach prefill from host memory, a chunk's columns at a time.
+    [[nodiscard]] bool host_staged_vision() const noexcept {
+        return overlay_vision() || cpu_vision();
+    }
+
     [[nodiscard]] bool mtp() const noexcept { return speculative == SpeculativeBackend::Mtp; }
 
     [[nodiscard]] bool dflash() const noexcept { return speculative == SpeculativeBackend::DFlash; }
