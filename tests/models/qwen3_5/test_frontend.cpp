@@ -636,6 +636,39 @@ int test_rendered_special_tokens() {
     return failures;
 }
 
+// The upstream Qwen templates raise on the developer role; a developer instruction reaches such a
+// template as the system block the maintained template renders for it. A template that renders
+// any role keeps receiving it unchanged.
+int test_developer_role_without_template_support() {
+    std::string upstream = thinking_toggle_template_source();
+    for (const auto& [from, to] :
+         {std::pair<std::string_view, std::string_view>{"system/developer", "system"},
+          {"role in ('system', 'developer')", "role == 'system'"},
+          {"role in (\"system\", \"developer\")", "role == \"system\""}}) {
+        for (std::size_t at = upstream.find(from); at != std::string::npos;
+             at             = upstream.find(from, at + to.size())) {
+            upstream.replace(at, from.size(), to);
+        }
+    }
+    if (upstream.find("developer") != std::string::npos) {
+        return check(false, "the developer-free template fixture still names the role");
+    }
+    const std::vector<fi::ChatMessage> messages = {
+        chat_message(ninfer::ChatRole::Developer, "be brief"),
+        chat_message(ninfer::ChatRole::User, "question")};
+    const auto lowered    = fi::CompiledChatTemplate::resolve(upstream).render(messages);
+    const auto maintained = thinking_toggle_template().render(messages);
+    int failures = check(lowered.text == maintained.text &&
+                             lowered.text.find("<|im_start|>system\nbe brief") != std::string::npos,
+                         "a developer message did not render as the system instruction");
+    const auto generic =
+        fi::CompiledChatTemplate::resolve("{% for m in messages %}{{ m.role }}|{% endfor %}")
+            .render(messages, {.add_generation_prompt = false});
+    failures += check(generic.text == "developer|user|",
+                      "a template that renders any role did not receive the developer role");
+    return failures;
+}
+
 int test_repeated_special_tokens_scan_linearly() {
     constexpr std::string_view token = "<|image_pad|>";
     std::string text;
@@ -2772,6 +2805,7 @@ int main() {
     failures += test_bpe_merge_order();
     failures += test_boundary_aware_tokenization();
     failures += test_rendered_special_tokens();
+    failures += test_developer_role_without_template_support();
     failures += test_repeated_special_tokens_scan_linearly();
     failures += test_bounded_tokenizer_prefix();
     failures += test_context_capacity_guard();

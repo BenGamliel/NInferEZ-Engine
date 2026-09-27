@@ -157,6 +157,25 @@ CompiledChatTemplate CompiledChatTemplate::resolve(std::string_view source, std:
 RenderedChat CompiledChatTemplate::render(const std::vector<ChatMessage>& messages,
                                           ChatRenderOptions options,
                                           const PreparationControl& control) const {
+    try {
+        return render_as(messages, options, control, false);
+    } catch (const RequestError&) { throw; } catch (const std::invalid_argument&) {
+        // The upstream Qwen templates raise on the developer role. A developer message is a
+        // system-level instruction, so a template that refuses it gets it as one; a template
+        // that refuses the system role as well still fails.
+        if (std::none_of(messages.begin(), messages.end(), [](const ChatMessage& message) {
+                return message.role == ChatRole::Developer;
+            })) {
+            throw;
+        }
+        return render_as(messages, options, control, true);
+    }
+}
+
+RenderedChat CompiledChatTemplate::render_as(const std::vector<ChatMessage>& messages,
+                                             const ChatRenderOptions& options,
+                                             const PreparationControl& control,
+                                             bool developer_as_system) const {
     if (messages.empty()) throw std::invalid_argument("chat requires at least one message");
     check_preparation_control(control, "chat template");
     const bool continuation =
@@ -190,7 +209,9 @@ RenderedChat CompiledChatTemplate::render(const std::vector<ChatMessage>& messag
              !message.tool_calls.empty() || !message.tool_call_id.empty())) {
             throw std::invalid_argument("system and developer messages may contain only text");
         }
-        Json value{{"role", role_name(message.role)}};
+        Json value{{"role", message.role == ChatRole::Developer && developer_as_system
+                                ? role_name(ChatRole::System)
+                                : role_name(message.role)}};
         const auto pointer = "/messages/" + std::to_string(i);
         auto& origin       = sources[i];
         if (!message.has_media()) {

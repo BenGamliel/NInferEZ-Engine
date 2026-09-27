@@ -140,6 +140,11 @@ private:
     CompiledChatTemplate(text::JinjaTemplate compiled, nlohmann::ordered_json special_tokens)
         : compiled_(std::move(compiled)), special_tokens_(std::move(special_tokens)) {}
 
+    [[nodiscard]] RenderedChat render_as(const std::vector<ChatMessage>& messages,
+                                         const ChatRenderOptions& options,
+                                         const PreparationControl& control,
+                                         bool developer_as_system) const;
+
     text::JinjaTemplate compiled_;
     nlohmann::ordered_json special_tokens_;
 };
