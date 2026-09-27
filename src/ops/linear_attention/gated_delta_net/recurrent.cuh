@@ -747,64 +747,71 @@ __global__ void __launch_bounds__(kWarpSize* kNumWarps, 2)
     constexpr int kThreads     = kWarpSize * kNumWarps;
     constexpr int kRowChunks   = kStateDim * static_cast<int>(sizeof(__nv_bfloat16)) / 16;
     constexpr int kValueChunks = kBlockDv * static_cast<int>(sizeof(__nv_bfloat16)) / 16;
-    for (int i = tid; i < valid * kRowChunks; i += kThreads) {
-        const int token = i / kRowChunks;
-        const int chunk = (i - token * kRowChunks) * 8;
-        cp_async<16>(&stage.key[token][chunk], access.key_ptr(coord, token) + chunk);
-        cp_async<16>(&stage.query[token][chunk], access.query_ptr(coord, token) + chunk);
-    }
-    for (int i = tid; i < valid * kValueChunks; i += kThreads) {
-        const int token = i / kValueChunks;
-        const int chunk = (i - token * kValueChunks) * 8;
-        cp_async<16>(&stage.value[token][chunk],
-                     access.value_ptr(coord, token) + coord.state_tile * kBlockDv + chunk);
-    }
-    if (tid < valid) {
-        const RawGatePair gate = access.load_gate(coord, tid);
-        stage.g[tid]           = gate.g;
-        stage.beta[tid]        = gate.beta;
-    }
-    cp_commit();
-    cp_wait<0>();
-    __syncthreads();
-
-    // run_recurrent_sequence<true, RecordEffects> over the staged inputs, operation for operation.
-    RawQkLane key = staged_qk_lane(stage.key[0], coord.dqk_base);
-    RecordEffects::observe_key(access, coord, 0, key);
-    normalize_qk_lane<true>(key.value, coord.lane);
-    for (std::int32_t token = 0; token < valid; ++token) {
-        const float g    = stage.g[token];
-        const float beta = stage.beta[token];
-        const RawGatePair gate{make_uint2(__float_as_uint(g), __float_as_uint(beta)), g, beta};
-        RawValueLane value{__float2bfloat16(0.0f), 0.0f};
-        if (coord.lane < kDvPerWarp) {
-            value.bits  = stage.value[token][coord.warp * kDvPerWarp + coord.lane];
-            value.value = __bfloat162float(value.bits);
+    // The stage holds kRecordMaxTokens columns; a wider single-row copy round runs its columns
+    // window by window over the state kept in registers.
+    for (std::int32_t base = 0; base < valid; base += kRecordMaxTokens) {
+        const std::int32_t count = min(kRecordMaxTokens, valid - base);
+        if (base != 0) { __syncthreads(); }
+        for (int i = tid; i < count * kRowChunks; i += kThreads) {
+            const int token = i / kRowChunks;
+            const int chunk = (i - token * kRowChunks) * 8;
+            cp_async<16>(&stage.key[token][chunk], access.key_ptr(coord, base + token) + chunk);
+            cp_async<16>(&stage.query[token][chunk], access.query_ptr(coord, base + token) + chunk);
         }
-        RecordEffects::observe_value_gate(access, coord, token, value, gate);
-
-        apply_gdn_transition(state, key.value, value.value, gate.g, gate.beta);
-
-        if (token + 1 < valid) {
-            key = staged_qk_lane(stage.key[token + 1], coord.dqk_base);
-            RecordEffects::observe_key(access, coord, token + 1, key);
-            normalize_qk_lane<true>(key.value, coord.lane);
+        for (int i = tid; i < count * kValueChunks; i += kThreads) {
+            const int token = i / kValueChunks;
+            const int chunk = (i - token * kValueChunks) * 8;
+            cp_async<16>(&stage.value[token][chunk], access.value_ptr(coord, base + token) +
+                                                         coord.state_tile * kBlockDv + chunk);
         }
+        if (tid < count) {
+            const RawGatePair gate = access.load_gate(coord, base + tid);
+            stage.g[tid]           = gate.g;
+            stage.beta[tid]        = gate.beta;
+        }
+        cp_commit();
+        cp_wait<0>();
+        __syncthreads();
 
-        RawQkLane query = staged_qk_lane(stage.query[token], coord.dqk_base);
-        normalize_qk_lane<true>(query.value, coord.lane);
-        float attn_val = 0.0f;
+        // run_recurrent_sequence<true, RecordEffects> over the staged inputs, operation for
+        // operation.
+        RawQkLane key = staged_qk_lane(stage.key[0], coord.dqk_base);
+        RecordEffects::observe_key(access, coord, base, key);
+        normalize_qk_lane<true>(key.value, coord.lane);
+        for (std::int32_t token = 0; token < count; ++token) {
+            const float g    = stage.g[token];
+            const float beta = stage.beta[token];
+            const RawGatePair gate{make_uint2(__float_as_uint(g), __float_as_uint(beta)), g, beta};
+            RawValueLane value{__float2bfloat16(0.0f), 0.0f};
+            if (coord.lane < kDvPerWarp) {
+                value.bits  = stage.value[token][coord.warp * kDvPerWarp + coord.lane];
+                value.value = __bfloat162float(value.bits);
+            }
+            RecordEffects::observe_value_gate(access, coord, base + token, value, gate);
+
+            apply_gdn_transition(state, key.value, value.value, gate.g, gate.beta);
+
+            if (token + 1 < count) {
+                key = staged_qk_lane(stage.key[token + 1], coord.dqk_base);
+                RecordEffects::observe_key(access, coord, base + token + 1, key);
+                normalize_qk_lane<true>(key.value, coord.lane);
+            }
+
+            RawQkLane query = staged_qk_lane(stage.query[token], coord.dqk_base);
+            normalize_qk_lane<true>(query.value, coord.lane);
+            float attn_val = 0.0f;
 #pragma unroll
-        for (int r = 0; r < kDvPerWarp; ++r) {
-            float partial = 0.0f;
+            for (int r = 0; r < kDvPerWarp; ++r) {
+                float partial = 0.0f;
 #pragma unroll
-            for (int c = 0; c < kQkPerLane; ++c) { partial += state[r][c] * query.value[c]; }
-            partial = warp_sum<kWarpSize>(partial);
-            if (coord.lane == r) { attn_val = partial; }
-        }
-        if (coord.lane < kDvPerWarp) {
-            access.output_ptr(coord, token)[coord.dv_base + coord.lane] =
-                __float2bfloat16(attn_val * access.scale);
+                for (int c = 0; c < kQkPerLane; ++c) { partial += state[r][c] * query.value[c]; }
+                partial = warp_sum<kWarpSize>(partial);
+                if (coord.lane == r) { attn_val = partial; }
+            }
+            if (coord.lane < kDvPerWarp) {
+                access.output_ptr(coord, base + token)[coord.dv_base + coord.lane] =
+                    __float2bfloat16(attn_val * access.scale);
+            }
         }
     }
     zero_output_suffix(access, coord, valid, access.width);
