@@ -973,6 +973,8 @@ int main() {
                                         "--request-log-max-mib",
                                         "--response-store-max-mib",
                                         "--response-store-max-records",
+                                        "--rope-scaling-factor",
+                                        "--rope-scaling-original-context",
                                         "--rope-yarn",
                                         "--rope-yarn-factor",
                                         "--seed",
@@ -1229,6 +1231,26 @@ int main() {
                 (void)parse({"ninfer-serve", "model.ninfer", "--stats-port", stats_port});
             } catch (const std::invalid_argument&) { rejected = true; }
             failures += check(rejected, "--stats-port accepted the main port or an invalid port");
+        }
+        {
+            const ServeOptions interpolated =
+                parse({"ninfer-serve", "model.ninfer", "--rope-scaling-factor", "2.5",
+                       "--rope-scaling-original-context", "131072"});
+            failures += check(interpolated.rope_scaling_factor == 2.5F &&
+                                  interpolated.rope_scaling_original_context == 131072U,
+                              "--rope-scaling-factor/--rope-scaling-original-context not parsed");
+            const ServeOptions defaults = parse({"ninfer-serve", "model.ninfer"});
+            failures += check(defaults.rope_scaling_factor == 1.0F &&
+                                  defaults.rope_scaling_original_context == 0U,
+                              "position interpolation is not off by default");
+            for (const char* bad : {"0.5", "33", "nan"}) {
+                bool rejected = false;
+                try {
+                    (void)parse({"ninfer-serve", "model.ninfer", "--rope-scaling-factor", bad});
+                } catch (const std::invalid_argument&) { rejected = true; }
+                const std::string message = std::string("--rope-scaling-factor accepted ") + bad;
+                failures += check(rejected, message.c_str());
+            }
         }
         failures +=
             check(parse({"ninfer-serve", "model.ninfer", "--value-aware-demote"})

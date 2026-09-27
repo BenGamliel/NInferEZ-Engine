@@ -222,6 +222,12 @@ std::string usage_text(const char* argv0) {
            "  --rope-yarn-factor F          apply YaRN at this fixed factor, 1..4, to every\n"
            "                                position whatever --max-context is (default 1:\n"
            "                                as --rope-yarn decides)\n"
+           "  --rope-scaling-factor F       instead of YaRN, interpolate positions past\n"
+           "                                --rope-scaling-original-context linearly by F,\n"
+           "                                1..32 (default 1: off)\n"
+           "  --rope-scaling-original-context N\n"
+           "                                the interpolation threshold (default: the\n"
+           "                                model's native window)\n"
            "  --wddm-evictable-budget       Windows D3D12 builds: budget against dedicated\n"
            "                                memory, holding arenas resident\n"
            "\n"
@@ -355,6 +361,11 @@ Options parse_options(int argc, char** argv) {
             options.rope_yarn = true;
         } else if (arg == "--rope-yarn-factor") {
             options.rope_yarn_factor = product::parse_rope_yarn_factor(value(arg));
+        } else if (arg == "--rope-scaling-factor") {
+            options.rope_scaling_factor = product::parse_rope_scaling_factor(value(arg));
+        } else if (arg == "--rope-scaling-original-context") {
+            options.rope_scaling_original_context =
+                product::parse_rope_scaling_original_context(value(arg));
         } else if (arg == "--wddm-evictable-budget") {
             options.wddm_evictable_budget = true;
         } else if (arg == "--mlp-a8-decode") {

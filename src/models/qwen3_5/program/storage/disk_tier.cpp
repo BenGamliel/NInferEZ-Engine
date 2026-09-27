@@ -46,6 +46,10 @@ std::string disk_profile_directory(KvCacheStorage storage, std::size_t main_stri
         name += "_yarn" + std::to_string(std::lround(yarn.factor * 1000.0F)) + "_" +
                 std::to_string(yarn.native_context);
     }
+    if (yarn.interpolation_factor > 1.0F) {
+        name += "_pi" + std::to_string(std::lround(yarn.interpolation_factor * 1000.0F)) + "_" +
+                std::to_string(yarn.interpolation_threshold);
+    }
     return name;
 }
 

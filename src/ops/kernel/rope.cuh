@@ -135,10 +135,13 @@ __global__ void rope_fixed_kernel(const std::int32_t* positions, __nv_bfloat16* 
 }
 
 // The D256/R64 Text table under YaRN (RopeYarn in include/ninfer/ops/rope.h): the host supplies
-// each pair's inverse frequency and the attention factor that scales cos and sin.
+// each pair's inverse frequency, the attention factor that scales cos and sin, and the linear
+// position interpolation past a threshold (a threshold at the float maximum disables it).
 struct RopeYarnKernelTable {
     float inverse_frequency[32];
     float attention_factor;
+    float interpolation_threshold;
+    float interpolation_scale;
 };
 
 template <int QHeads, int KHeads, bool Mrope>
@@ -155,9 +158,13 @@ __global__ void rope_yarn_kernel(const std::int32_t* positions, __nv_bfloat16* q
     if (threadIdx.x < kHalf) {
         const int pair = static_cast<int>(threadIdx.x);
         const int axis = Mrope ? pair % 3 : 0;
-        const float angle =
-            static_cast<float>(positions[static_cast<std::int64_t>(axis) * tokens + token]) *
-            table.inverse_frequency[pair];
+        float position =
+            static_cast<float>(positions[static_cast<std::int64_t>(axis) * tokens + token]);
+        if (position > table.interpolation_threshold) {
+            position = table.interpolation_threshold +
+                       (position - table.interpolation_threshold) * table.interpolation_scale;
+        }
+        const float angle = position * table.inverse_frequency[pair];
         float sine;
         float cosine;
         sincosf(angle, &sine, &cosine);

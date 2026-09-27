@@ -1284,6 +1284,12 @@ std::uint32_t vision_item_token_bound(std::uint32_t capacity, const models::Load
 ops::RopeYarn planned_rope_yarn(const execution::Parameters& parameters,
                                 const EngineOptions& options) {
     const std::uint32_t native = parameters.model.config().text.max_position_embeddings;
+    if (options.rope_scaling_factor > 1.0F) {
+        return {.interpolation_factor    = options.rope_scaling_factor,
+                .interpolation_threshold = options.rope_scaling_original_context != 0
+                                               ? options.rope_scaling_original_context
+                                               : native};
+    }
     if (options.rope_yarn_factor > 1.0F) { return {options.rope_yarn_factor, native}; }
     if (!options.rope_yarn || options.max_context <= native) { return {}; }
     return {static_cast<float>(options.max_context) / static_cast<float>(native), native};

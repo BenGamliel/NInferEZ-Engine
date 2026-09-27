@@ -758,6 +758,8 @@ std::string format_server_start_json(
         {"gdn_state_fp16", engine_options.gdn_state_fp16},
         {"rope_yarn", engine_options.rope_yarn},
         {"rope_yarn_factor", engine_options.rope_yarn_factor},
+        {"rope_scaling_factor", engine_options.rope_scaling_factor},
+        {"rope_scaling_original_context", engine_options.rope_scaling_original_context},
         {"structured_output", engine_options.structured_output},
         {"concurrent_prefill", engine_options.concurrent_prefill},
         {"recover_invariant_failures", engine_options.recover_invariant_failures},

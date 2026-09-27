@@ -366,6 +366,13 @@ struct EngineOptions {
     // max_context is: Qwen documents one factor per deployment rather than one per window. 1 leaves
     // the choice to rope_yarn.
     float rope_yarn_factor = 1.0F;
+    // Linear position interpolation instead of YaRN: for the text and MTP layers a position above
+    // rope_scaling_original_context rotates at original + (p - original) / rope_scaling_factor,
+    // while positions up to it keep their exact angles. 1 disables it; it excludes rope_yarn and
+    // rope_yarn_factor and does not raise the window cap of four times the native window.
+    float rope_scaling_factor = 1.0F;
+    // The interpolation threshold; 0 is the model's native window.
+    std::uint32_t rope_scaling_original_context = 0;
     // Reserves the grammar mask planes that JSON and JSON Schema constrained requests sample
     // through. Off, those requests are refused and a DFlash round carries no grammar stage.
     bool structured_output = false;

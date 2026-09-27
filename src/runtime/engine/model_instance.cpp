@@ -79,6 +79,15 @@ void validate_options(const EngineOptions& options) {
         options.rope_yarn_factor > 4.0F) {
         throw std::invalid_argument("Engine rope_yarn_factor must be finite and in [1,4]");
     }
+    if (!std::isfinite(options.rope_scaling_factor) || options.rope_scaling_factor < 1.0F ||
+        options.rope_scaling_factor > 32.0F) {
+        throw std::invalid_argument("Engine rope_scaling_factor must be finite and in [1,32]");
+    }
+    if (options.rope_scaling_factor > 1.0F &&
+        (options.rope_yarn || options.rope_yarn_factor > 1.0F)) {
+        throw std::invalid_argument(
+            "Engine rope_scaling_factor excludes rope_yarn and rope_yarn_factor");
+    }
 }
 
 // The hybrid index ranks admission sources and values snapshots with the same calibrated
@@ -126,6 +135,8 @@ std::string hybrid_cache_fingerprint(const EngineOptions& options, const std::st
     out += ";kv=" + std::to_string(static_cast<int>(options.kv_cache));
     out += ";speculative=" + std::to_string(static_cast<int>(options.speculative.backend));
     out += ";yarn=" + std::to_string(options.rope_yarn_factor);
+    out += ";interpolation=" + std::to_string(options.rope_scaling_factor) + "@" +
+           std::to_string(options.rope_scaling_original_context);
     out += ";build=" + options.context_cache.hybrid.persistent_identity;
     return out;
 }

@@ -57,8 +57,11 @@ joined by blank lines, 2,048-token windows). With the test split written to a fi
 
 Past the model's native window `--rope-yarn` applies YaRN at factor `--context` / native, and
 `--rope-yarn-factor F` at a fixed factor in `[1,4]` whatever the window is (default `1`, native
-RoPE). Neither changes the artifact or the default 4,096-token window; long-context extrapolation
-is not a quality guarantee, so keep the factor fixed while comparing other numerical settings.
+RoPE). `--rope-scaling-factor F` instead interpolates positions past
+`--rope-scaling-original-context` (default: the native window) linearly by `F` in `[1,32]`, keeping
+the angles of every position up to it. None changes the artifact or the default 4,096-token window;
+long-context extrapolation is not a quality guarantee, so keep the factor fixed while comparing other
+numerical settings. The report records all four settings.
 
 ## Metric
 
@@ -91,6 +94,6 @@ are runtime results from the current artifact tokenizer and are recorded in each
 contain unrounded NLL/PPL values for every window, stream, domain, and the token-weighted overall
 aggregate.
 
-The schema-v3 report identifies the artifact's architecture, public name, actual weight formats
+The schema-v4 report identifies the artifact's architecture, public name, actual weight formats
 and prefill signature alongside the workload and numerical results; its execution configuration
-records `rope_yarn` and `rope_yarn_factor`.
+records `rope_yarn`, `rope_yarn_factor`, `rope_scaling_factor` and `rope_scaling_original_context`.

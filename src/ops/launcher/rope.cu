@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 
 namespace ninfer::ops::detail {
@@ -179,14 +180,19 @@ RopeYarnKernelTable yarn_table(int rotary_dim, float theta, const RopeYarn& yarn
     const double lo = std::max(std::floor(correction(32.0)), 0.0);
     double hi       = std::min(std::ceil(correction(1.0)), dim - 1.0);
     if (hi == lo) { hi += 0.001; }
+    const bool scaled = yarn.factor > 1.0F;
     RopeYarnKernelTable table{};
     for (int pair = 0; pair < rotary_dim / 2; ++pair) {
         const double frequency = std::pow(static_cast<double>(theta), -2.0 * pair / dim);
-        const double ramp      = std::clamp((pair - lo) / (hi - lo), 0.0, 1.0);
+        const double ramp      = scaled ? std::clamp((pair - lo) / (hi - lo), 0.0, 1.0) : 0.0;
         table.inverse_frequency[pair] =
-            static_cast<float>(frequency * ((1.0 - ramp) + ramp / yarn.factor));
+            static_cast<float>(frequency * ((1.0 - ramp) + ramp / (scaled ? yarn.factor : 1.0F)));
     }
-    table.attention_factor = static_cast<float>(0.1 * std::log(yarn.factor) + 1.0);
+    table.attention_factor  = scaled ? static_cast<float>(0.1 * std::log(yarn.factor) + 1.0) : 1.0F;
+    const bool interpolated = yarn.interpolation_factor > 1.0F;
+    table.interpolation_threshold = interpolated ? static_cast<float>(yarn.interpolation_threshold)
+                                                 : std::numeric_limits<float>::max();
+    table.interpolation_scale     = interpolated ? 1.0F / yarn.interpolation_factor : 1.0F;
     return table;
 }
 
@@ -249,7 +255,7 @@ void launch_generic(const Tensor& positions, int rotary_dim, float theta, Tensor
 
 void rope_launch(const Tensor& positions, int rotary_dim, float theta, const RopeYarn& yarn,
                  Tensor& q, Tensor& k, cudaStream_t stream) {
-    if (yarn.factor > 1.0F) {
+    if (yarn.active()) {
         launch_yarn(positions, rotary_dim, theta, yarn, &q, &k, stream);
     } else if (!launch_fixed_pair(positions, rotary_dim, theta, q, k, stream)) {
         launch_generic(positions, rotary_dim, theta, &q, &k, stream);
@@ -259,7 +265,7 @@ void rope_launch(const Tensor& positions, int rotary_dim, float theta, const Rop
 
 void rope_single_launch(const Tensor& positions, int rotary_dim, float theta, const RopeYarn& yarn,
                         Tensor& x, cudaStream_t stream) {
-    if (yarn.factor > 1.0F) {
+    if (yarn.active()) {
         launch_yarn(positions, rotary_dim, theta, yarn, &x, nullptr, stream);
     } else if (!launch_fixed_single_dispatch(positions, rotary_dim, theta, x, stream)) {
         launch_generic(positions, rotary_dim, theta, &x, nullptr, stream);

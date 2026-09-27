@@ -331,6 +331,8 @@ int main(int argc, char** argv) {
         engine_options.gdn_state_fp16           = cli.gdn_state_fp16;
         engine_options.rope_yarn                = cli.rope_yarn;
         engine_options.rope_yarn_factor         = cli.rope_yarn_factor;
+        engine_options.rope_scaling_factor           = cli.rope_scaling_factor;
+        engine_options.rope_scaling_original_context = cli.rope_scaling_original_context;
         engine_options.structured_output =
             cli.structured_output.kind != ninfer::StructuredOutputKind::None;
         engine_options.wddm_evictable_budget    = cli.wddm_evictable_budget;

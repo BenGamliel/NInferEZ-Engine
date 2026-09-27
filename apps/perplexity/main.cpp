@@ -67,6 +67,8 @@ struct Options {
     bool gdn_state_fp16                 = false;
     bool rope_yarn                      = false;
     float rope_yarn_factor              = 1.0F;
+    float rope_scaling_factor                   = 1.0F;
+    std::uint32_t rope_scaling_original_context = 0;
     bool mlp_a8_decode                  = false;
     bool prefill_a8                     = true;
     bool prefill_cublas                 = false;
@@ -79,9 +81,12 @@ std::string usage_text() {
     return "usage: ninfer-perplexity <model.ninfer> "
            "(--corpus <manifest.json> [--quick] | --text <utf8-file>)\n"
            "       [--context N] [--stride N | --disjoint] [--device N]\n"
-           "       [--kv-dtype bf16|int8|fp8|rk8v4|rk4v4|rk4v4-e8|rk2v4-e8|nvfp4|k8v4] [--output <directory>]\n"
-           "       [--lm-head-q4|--lm-head-q6] [--embedding-q4|--embedding-q6] [--mtp-experts-q4] [--gdn-state-fp16]\n"
+           "       [--kv-dtype bf16|int8|fp8|rk8v4|rk4v4|rk4v4-e8|rk2v4-e8|nvfp4|k8v4] [--output "
+           "<directory>]\n"
+           "       [--lm-head-q4|--lm-head-q6] [--embedding-q4|--embedding-q6] [--mtp-experts-q4] "
+           "[--gdn-state-fp16]\n"
            "       [--mlp-a8-decode] [--no-prefill-a8] [--rope-yarn] [--rope-yarn-factor F]\n"
+           "       [--rope-scaling-factor F [--rope-scaling-original-context N]]\n"
            "       (--mlp-a8-decode is inert here: the route it enables is verify-phase"
            "        only, and scoring runs the prefill phase)\n"
            "       (--no-prefill-a8 is the opposite: scoring runs the prefill phase, so this is\n"
@@ -181,6 +186,13 @@ Options parse_options(int argc, char** argv) {
         } else if (option == "--rope-yarn-factor") {
             out.rope_yarn_factor =
                 ninfer::product::parse_rope_yarn_factor(value("--rope-yarn-factor"));
+        } else if (option == "--rope-scaling-factor") {
+            out.rope_scaling_factor =
+                ninfer::product::parse_rope_scaling_factor(value("--rope-scaling-factor"));
+        } else if (option == "--rope-scaling-original-context") {
+            out.rope_scaling_original_context =
+                ninfer::product::parse_rope_scaling_original_context(
+                    value("--rope-scaling-original-context"));
         } else if (option == "--mlp-a8-decode") {
             out.mlp_a8_decode = true;
         } else if (option == "--no-prefill-a8") {
@@ -313,6 +325,8 @@ int run(const Options& options, const std::shared_ptr<spdlog::logger>& logger,
     engine_options.gdn_state_fp16   = options.gdn_state_fp16;
     engine_options.rope_yarn        = options.rope_yarn;
     engine_options.rope_yarn_factor = options.rope_yarn_factor;
+    engine_options.rope_scaling_factor           = options.rope_scaling_factor;
+    engine_options.rope_scaling_original_context = options.rope_scaling_original_context;
     engine_options.mlp_a8_decode    = options.mlp_a8_decode;
     engine_options.prefill_a8       = options.prefill_a8;
     engine_options.prefill_cublas   = options.prefill_cublas;
@@ -474,7 +488,7 @@ int run(const Options& options, const std::shared_ptr<spdlog::logger>& logger,
     }
 
     json report{
-        {"schema_version", 3},
+        {"schema_version", 4},
         {"metric",
          {{"name", "fixed-window truncated-context causal perplexity"}, {"log_base", "natural"}}},
         {"artifact",
@@ -494,6 +508,8 @@ int run(const Options& options, const std::shared_ptr<spdlog::logger>& logger,
           {"context_tokens", options.context},
           {"rope_yarn", options.rope_yarn},
           {"rope_yarn_factor", options.rope_yarn_factor},
+          {"rope_scaling_factor", options.rope_scaling_factor},
+          {"rope_scaling_original_context", options.rope_scaling_original_context},
           {"fast_prefill_kernel", options.fast_prefill_kernel},
           {"stride_tokens", options.disjoint ? options.context : options.stride},
           {"windows", options.disjoint ? "disjoint" : "sliding"},

@@ -51,11 +51,20 @@ void rope(const Tensor& positions, int rotary_dim, float theta, Tensor& x, cudaS
  * 1),
  *
  * and cos and sin both carry the attention factor 0.1*ln(s)+1. factor<=1 leaves RoPE unscaled.
- * Text 1-D and Text MRoPE at D256/R64 only.
+ *
+ * Independently, linear position interpolation past a threshold T with factor f rotates a position
+ * p > T at T + (p - T) / f, in floating point, so positions up to T keep their exact angles.
+ * interpolation_factor<=1 leaves positions unscaled. Text 1-D and Text MRoPE at D256/R64 only.
  */
 struct RopeYarn {
-    float factor                 = 1.0F;
-    std::uint32_t native_context = 0;
+    float factor                          = 1.0F;
+    std::uint32_t native_context          = 0;
+    float interpolation_factor            = 1.0F;
+    std::uint32_t interpolation_threshold = 0;
+
+    [[nodiscard]] bool active() const noexcept {
+        return factor > 1.0F || interpolation_factor > 1.0F;
+    }
 };
 
 void rope(const Tensor& positions, int rotary_dim, float theta, const RopeYarn& yarn, Tensor& q,

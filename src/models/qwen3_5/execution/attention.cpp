@@ -103,9 +103,9 @@ void text_qk_norm_rope(const Tensor& positions, const RopeConfig& rope,
                        const Tensor& query, const Tensor& key, Tensor& normalized_query,
                        Tensor& normalized_key, const ops::RopeYarn& yarn, cudaStream_t stream) {
     require_rope_axes(positions, rope);
-    // The fused Op rotates with the unscaled frequencies, so a YaRN-scaled window keeps the three
-    // separate calls.
-    if (!(yarn.factor > 1.0F) && fused_text_qk_norm_rope(positions, rope, attention, query.ne[2])) {
+    // The fused Op rotates unscaled positions at the unscaled frequencies, so YaRN or position
+    // interpolation keeps the three separate calls.
+    if (!yarn.active() && fused_text_qk_norm_rope(positions, rope, attention, query.ne[2])) {
         ops::rmsnorm_rope(positions, q_norm_weight, k_norm_weight, query, key, normalized_query,
                           normalized_key, stream);
         return;

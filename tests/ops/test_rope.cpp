@@ -35,9 +35,21 @@ struct Geometry {
     // Above one: YaRN over a native window of native_context positions.
     float yarn_factor  = 1.0F;
     int native_context = 0;
+    // Above one: linear position interpolation past interpolation_threshold.
+    float interpolation_factor  = 1.0F;
+    int interpolation_threshold = 0;
 
     [[nodiscard]] ops::RopeYarn yarn() const {
-        return {yarn_factor, static_cast<std::uint32_t>(native_context)};
+        return {yarn_factor, static_cast<std::uint32_t>(native_context), interpolation_factor,
+                static_cast<std::uint32_t>(interpolation_threshold)};
+    }
+
+    [[nodiscard]] double rotated_position(int position) const {
+        if (!(interpolation_factor > 1.0F) || position <= interpolation_threshold) {
+            return position;
+        }
+        return interpolation_threshold +
+               static_cast<double>(position - interpolation_threshold) / interpolation_factor;
     }
 };
 
@@ -128,7 +140,7 @@ std::vector<double> rope_oracle(const std::vector<float>& input, const std::vect
                 const double frequency = yarn_frequency(
                     geometry, pair, std::pow(static_cast<double>(geometry.theta), exponent));
                 const double phase =
-                    static_cast<double>(
+                    geometry.rotated_position(
                         positions[static_cast<std::size_t>(axis) * geometry.tokens + token]) *
                     frequency;
                 const double cosine  = std::cos(phase) * yarn_attention_factor(geometry);
@@ -511,6 +523,16 @@ int main() {
                               31, 16, 8);
     failures +=
         run_single_case({"27b mtp k yarn", 256, 64, 1, 128, kTextTheta, 4.0F, 262'144}, 4, 8192);
+
+    // Linear position interpolation past a threshold the positions cross, 1-D, MRoPE and the
+    // single-tensor form: positions up to the threshold keep their angles.
+    failures += run_pair_case(
+        {"27b text interpolation", 256, 64, 1, 128, kTextTheta, 1.0F, 0, 2.5F, 2048}, 24, 4, 2000);
+    failures += run_pair_case(
+        {"27b text mrope interpolation", 256, 64, 3, 7, kTextTheta, 1.0F, 0, 3.0F, 2050}, 24, 4,
+        2048);
+    failures += run_single_case(
+        {"27b mtp k interpolation", 256, 64, 1, 128, kTextTheta, 1.0F, 0, 2.0F, 8200}, 4, 8192);
 
     // MTP bulk K append uses the single-tensor form; proposal tail uses the pair form above.
     failures += run_single_case({"27b mtp k mrope", 256, 64, 3, 128, kTextTheta}, 4, 8192);

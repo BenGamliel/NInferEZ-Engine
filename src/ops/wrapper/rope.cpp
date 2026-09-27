@@ -97,9 +97,12 @@ void require_model_mode(int axes, int rotary_dim, std::int32_t head_dim) {
 }
 
 void require_yarn(const RopeYarn& yarn, int axes, int rotary_dim, std::int32_t head_dim) {
-    if (!(yarn.factor > 1.0F)) { return; }
-    if (!std::isfinite(yarn.factor) || yarn.native_context == 0) {
+    if (!yarn.active()) { return; }
+    if (yarn.factor > 1.0F && (!std::isfinite(yarn.factor) || yarn.native_context == 0)) {
         throw std::invalid_argument("rope: YaRN needs a finite factor and a native context");
+    }
+    if (!std::isfinite(yarn.interpolation_factor)) {
+        throw std::invalid_argument("rope: position interpolation needs a finite factor");
     }
     if (axes == 2 || head_dim != kTextHeadDim || rotary_dim != 64) {
         throw std::invalid_argument("rope: YaRN applies to the D256/R64 Text table only");
