@@ -1,6 +1,7 @@
 #include "ninfer/engine.h"
 
 #include <algorithm>
+#include <cctype>
 #include <charconv>
 #include <cstdlib>
 #include <iomanip>
@@ -157,16 +158,36 @@ int main(int argc, char** argv) {
                         tail.speculative.ngram_drafted_tokens == 0,
                     "ngram ran when no draft fit the remaining output budget");
         }
+        // A stop token must first occur at its index, or the stop would fire earlier. A natural
+        // stop can leave fewer than four such tokens past index 16 (an RTX 5090 ends this copy
+        // after 33 tokens); only then do earlier tokens fill the four cases. They skip tokens
+        // that end in whitespace: there, a stop at the blank line after the first function was
+        // continued with a second blank line instead of the next function.
+        const auto first_occurrence = [&](std::size_t i) {
+            const auto begin = reference.generated_token_ids.begin();
+            return std::find(begin, begin + i, reference.generated_token_ids[i]) == begin + i;
+        };
+        std::vector<std::size_t> stop_indices;
+        for (std::size_t i = 16; i < selection_end; ++i) {
+            if (first_occurrence(i)) { stop_indices.push_back(i); }
+        }
+        const std::size_t late_indices = stop_indices.size();
+        if (late_indices < 4) {
+            for (std::size_t i = std::min<std::size_t>(16, selection_end); i-- > 1;) {
+                const auto bytes = engine.token_bytes(reference.generated_token_ids[i]);
+                if (first_occurrence(i) && !bytes.empty() &&
+                    std::isspace(static_cast<unsigned char>(bytes.back())) == 0) {
+                    stop_indices.push_back(i);
+                }
+            }
+        }
         unsigned cases = 0, partial_cases = 0, fresh_differences = 0;
         std::uint64_t accepted = 0;
-        for (std::size_t i = 16; i < selection_end && cases < 12; ++i) {
-            const auto token = reference.generated_token_ids[i];
-            if (std::find(reference.generated_token_ids.begin(),
-                          reference.generated_token_ids.begin() + i,
-                          token) != reference.generated_token_ids.begin() + i) {
-                continue;
-            }
-            auto stop = request(256, true);
+        for (std::size_t position = 0; position < stop_indices.size(); ++position) {
+            if (cases == 12 || (position >= late_indices && cases >= 4)) { break; }
+            const std::size_t i = stop_indices[position];
+            const auto token    = reference.generated_token_ids[i];
+            auto stop           = request(256, true);
             stop.stop.token_ids.push_back(token);
             const auto stopped = engine.generate(engine.prepare(prompt(source)), stop);
             require(stopped.finish_reason == ninfer::FinishReason::StopToken &&
