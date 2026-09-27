@@ -603,7 +603,7 @@ inline PackedWeight make_patterned_weight(QType qtype, std::int32_t n, std::int3
     }
     const std::int32_t partial_group_lanes = k % spec.group_size;
     if (partial_group_lanes != 0) {
-        std::int8_t codes[64]{};
+        std::vector<std::int8_t> codes(static_cast<std::size_t>(spec.group_size), 0);
         const std::int32_t group = logical_groups - 1;
         for (std::int32_t row = 0; row < n; ++row) {
             const std::size_t group_index = static_cast<std::size_t>(row) * kg + group;
@@ -616,9 +616,9 @@ inline PackedWeight make_patterned_weight(QType qtype, std::int32_t n, std::int3
                 codes[lane] =
                     static_cast<std::int8_t>(detail::unpack_lowbit_code(nibble, high, spec, lane));
             }
-            std::fill(codes + partial_group_lanes, codes + spec.group_size,
+            std::fill(codes.begin() + partial_group_lanes, codes.end(),
                       static_cast<std::int8_t>(0));
-            detail::pack_lowbit_group(codes, spec, nibble, high);
+            detail::pack_lowbit_group(codes.data(), spec, nibble, high);
         }
     }
     constexpr std::uint16_t kUnitScales[]  = {0x3800u, 0x3a00u, 0x3c00u, 0x3d00u};
