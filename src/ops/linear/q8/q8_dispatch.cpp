@@ -48,7 +48,8 @@ Q8Launch select_q8_a16_launch(std::int32_t n, std::int32_t k, std::int32_t t) {
     if (t <= 0) throw std::invalid_argument("q8 linear: T must be positive");
     for (const auto& entry : kShapes) {
         if (entry.n != n || entry.k != k) continue;
-        if (entry.unified != nullptr && linear_route_table() == LinearRouteTable::Unified) {
+        if (entry.unified != nullptr &&
+            linear_route_table(LinearRouteFamily::Q8, t) == LinearRouteTable::Unified) {
             return entry.unified(t);
         }
         return entry.select(t);
