@@ -149,6 +149,10 @@ ninfer::EngineOptions automatic_long_anchor_engine_options(const char* artifact)
     // The scenario's messages are a few dozen tokens; disable the anchor spacing so both
     // interior boundaries are anchored, as the scenario asserts.
     set_anchor_spacing(options.context_cache, 0);
+    // Written against releasing the checkpoint a conversation diverged from, which this line keeps
+    // opt-in: without it the second branch's endpoint keeps its value and the third branch is
+    // prefilled from Root instead of resuming from the shared anchor.
+    options.context_cache.release_diverged_checkpoints = true;
     return options;
 }
 
@@ -265,8 +269,11 @@ ninfer::EngineOptions recency_retention_engine_options(const char* artifact) {
     options.speculative.backend              = ninfer::SpeculativeBackend::None;
     options.max_concurrency                  = 1;
     options.max_pending_requests             = 1;
-    options.context_cache.device_state_slots = 4;
-    options.context_cache.host_state_slots   = 0;
+    // Enough Device state slots for every conversation's checkpoints, so KV capacity forces the
+    // evictions: a private checkpoint that finds the state pool full reclaims an idle
+    // conversation itself, which would decide the scenario before KV pressure does.
+    options.context_cache.device_state_slots                = 16;
+    options.context_cache.host_state_slots                  = 0;
     options.context_cache.host_kv_capacity_bytes            = 0;
     options.context_cache.max_private_continuations         = 8;
     options.context_cache.max_shared_prefixes               = 0;
