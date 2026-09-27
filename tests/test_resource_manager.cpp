@@ -4832,6 +4832,53 @@ void test_automatic_reclaim_waits_for_a_planned_capture() {
                          "shared prefix was lost to a capture that never published");
 }
 
+// A request that extends the only automatic shared prefix must not reclaim it for a capture of
+// its own longer prefix, even when it resumed from a deeper private checkpoint instead: every
+// request that capture could serve also matches the shorter prefix.
+void test_automatic_reclaim_spares_the_prefix_the_capture_extends() {
+    FakeManager manager = make_manager(1, 4, 1);
+    FakeProgram program;
+
+    publish_shared_prefix(manager, program, 71, 1, 1,
+                          ninfer::SharedCandidateEvidence::DefaultAutomatic);
+    const ActiveRequest first = start_active(manager, program, 71, make_base(71), 2);
+    (void)finish_active(manager, program, first, 96);
+
+    FakeRequestBasePlan base        = make_base(71);
+    base.value.prompt_tokens        = 128;
+    base.value.publish_continuation = false;
+    base.cache.opportunities.push_back(FakeContextCache::Opportunity{
+        .kind     = ninfer::PromptCacheMarkerKind::SharedStablePrefix,
+        .evidence = ninfer::SharedCandidateEvidence::DefaultAutomatic,
+        .frontier = 128,
+    });
+    auto inspection = manager.inspect(program, FakePreparedPrompt{71}, base, 3);
+    require(inspection.choice.has_value() &&
+                inspection.choice->summary().prefix_reuse_path !=
+                    ninfer::PrefixReusePath::SharedStablePrefix &&
+                inspection.choice->summary().reusable_prompt_tokens > 64,
+            "the extending request did not resume from its deeper private checkpoint");
+    const ActiveRequest active = start_active(manager, program, 71, base, 3);
+    program.capture_assessment = FakeCaptureAssessment{
+        .shortlist_key          = FakeShortlistKey{.digest = 71, .frontier = 128},
+        .shared_evidence        = ninfer::SharedCandidateEvidence::DefaultAutomatic,
+        .protected_rebuild_work = PrefillWork{.tokens = 128},
+        .publishes_shared       = true,
+        .physically_feasible    = true,
+    };
+    const auto reserved =
+        manager.reserve_active_capture(program, active.lane, FakeCaptureOffer{.id = 2}, 0, {});
+    if (reserved == FakeManager::ActiveCaptureReserveResult::Reserved) {
+        auto progress = manager.progress_context_transaction(program, {});
+        (void)std::get<FakeManager::ActiveCaptureOutcome>(std::move(progress));
+    }
+    require(program.released_shared_prefix_keys.empty(),
+            "an automatic reclaim released the shared prefix its own capture extends");
+    (void)finish_active(manager, program, active);
+    require_shared_reuse(manager, program, 71, 4, true,
+                         "the extended shared prefix lost reuse to its own conversation");
+}
+
 } // namespace
 
 // Two private victims with different rebuild costs, and Host room for only one demotion: the
@@ -5196,6 +5243,8 @@ int main() {
              test_superseded_session_turn_ranks_below_its_binding);
     run_test("automatic reclaim waits for a planned capture",
              test_automatic_reclaim_waits_for_a_planned_capture);
+    run_test("automatic reclaim spares the prefix the capture extends",
+             test_automatic_reclaim_spares_the_prefix_the_capture_extends);
     run_test("escape hatch clears all when nothing fits",
              test_escape_hatch_clears_all_when_nothing_fits);
     run_test("escape hatch ladder fits the committed target budget",

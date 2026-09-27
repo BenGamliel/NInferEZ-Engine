@@ -553,6 +553,9 @@ reuse edge，按最近一次命中或发布的 retention epoch 排序，相同�
 slot 重新规划 capture，因此无法完成的 capture 不会白白丢掉 entry。materialization 选择时可回收 slot 与空位
 一起计入 surplus 容量。没有这条路径时，catalog 一旦被 automatic entries 填满，之后的普通请求在 Engine
 重启前都拿不到 shared-prefix reuse（Neroued/ninfer issue #251）。
+请求自身延伸的 entry（其 materialization 在该 entry 的 frontier 上精确匹配过的 resident key）不会为该请求
+的 capture 回收：凡是能用这个更长 prefix 的请求也都匹配那个更短的 entry，回收只会让 slot 缩窄到一个会话；
+materialization 计算可回收 slot 时同样排除这些 entry。
 
 Marker、evidence 和 shortlist key 都不证明命中；Program 对 read、dedup 和 publication 重新验证完整
 identity。候选创建 source 的顺序为：exact shared owner 直接 dedup；selected exact private reuse base 在

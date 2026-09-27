@@ -718,7 +718,8 @@ public:
                              [](const SharedCatalogEntry& entry) {
                                  return entry.state == SharedCatalogState::Vacant;
                              })) {
-                reclaim_slot = least_recent_reclaimable_shared_slot();
+                reclaim_slot = least_recent_reclaimable_shared_slot(
+                    active_[lane.value].extended_resident_keys);
             }
 
             // A private-only candidate with no committed demand and no shared credit adds no public
@@ -1579,6 +1580,9 @@ private:
         bool admitted_under_pressure = false;
         std::optional<ActiveOwnerEdge> retained_private_source;
         std::vector<ActiveOwnerEdge> shared_sources;
+        // Resident keys the request matched exactly at their frontiers: each is a prefix of its
+        // prompt, and so of anything the request captures.
+        std::vector<PrefixShortlistKey> extended_resident_keys;
     };
 
     struct MaterializationRecord {
@@ -1671,6 +1675,7 @@ private:
         active.publication_order    = 0;
         active.retained_private_source.reset();
         active.shared_sources.clear();
+        active.extended_resident_keys.clear();
         active.admitted_under_pressure = false;
     }
 
@@ -1999,10 +2004,20 @@ private:
                !entry.explicit_credit;
     }
 
-    [[nodiscard]] std::uint32_t shared_reclaimable_slot_count() const {
+    // A shared prefix the capturing request extends serves every request that capture could and
+    // more, so it is never reclaimed for that capture: the slot would narrow to one conversation.
+    [[nodiscard]] bool shared_reclaimable_for(const SharedCatalogEntry& entry, std::uint32_t slot,
+                                              std::span<const PrefixShortlistKey> extended) const {
+        return shared_automatic_reclaimable(entry, slot) &&
+               std::find(extended.begin(), extended.end(),
+                         entry.summary.checkpoint.shortlist_key) == extended.end();
+    }
+
+    [[nodiscard]] std::uint32_t
+    shared_reclaimable_slot_count(std::span<const PrefixShortlistKey> extended) const {
         std::uint32_t count = 0;
         for (std::uint32_t slot = 0; slot < shared_catalog_count_; ++slot) {
-            if (shared_automatic_reclaimable(shared_catalog_[slot], slot)) { ++count; }
+            if (shared_reclaimable_for(shared_catalog_[slot], slot, extended)) { ++count; }
         }
         return count;
     }
@@ -2014,13 +2029,14 @@ private:
     // without reclamation a saturated shared catalog freezes them out for the rest of the
     // engine's life (issue #251). Choosing by use rather than by publication order keeps a
     // prefix every new conversation still hits from being dropped for a newcomer.
-    [[nodiscard]] std::optional<std::uint32_t> least_recent_reclaimable_shared_slot() const {
+    [[nodiscard]] std::optional<std::uint32_t>
+    least_recent_reclaimable_shared_slot(std::span<const PrefixShortlistKey> extended) const {
         std::optional<std::uint32_t> victim;
         std::tuple<std::uint64_t, std::uint64_t> oldest{std::numeric_limits<std::uint64_t>::max(),
                                                         std::numeric_limits<std::uint64_t>::max()};
         for (std::uint32_t slot = 0; slot < shared_catalog_count_; ++slot) {
             const SharedCatalogEntry& entry = shared_catalog_[slot];
-            if (!shared_automatic_reclaimable(entry, slot)) { continue; }
+            if (!shared_reclaimable_for(entry, slot, extended)) { continue; }
             const std::tuple<std::uint64_t, std::uint64_t> key{shared_recency_epoch(entry),
                                                                entry.id};
             if (key < oldest) {
@@ -2223,7 +2239,8 @@ private:
         // transaction can actually fulfil instead of silently dropping every automatic candidate
         // once the catalog saturates (issue #251).
         const std::uint32_t shared_publication_slack =
-            vacant_shared_slots + shared_reclaimable_slot_count();
+            vacant_shared_slots +
+            shared_reclaimable_slot_count(provisional_demand.exact_resident_keys);
         for (const auto& opportunity : base.context_cache().opportunities) {
             if (opportunity.kind != PromptCacheMarkerKind::SharedStablePrefix ||
                 opportunity.frontier < selected_summary.reusable_prompt_tokens) {
@@ -3578,7 +3595,8 @@ private:
                 active_edge(shared_capability(record->shared_source->slot)));
         }
         active.admitted_under_pressure = admitted_under_pressure;
-        StartResult start = std::move(*result.published);
+        active.extended_resident_keys  = record->demand.exact_resident_keys;
+        StartResult start              = std::move(*result.published);
         result.published.reset();
         commit_demand(std::move(record->demand));
         return MaterializationOutcome{
