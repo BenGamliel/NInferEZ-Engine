@@ -249,6 +249,52 @@ From other forks:
   `120a` build: on an RTX 5090 (native build, `-DNINFER_SM120_NATIVE=ON`) the 20.6 GB text
   artifact prefilled 27,663 tok/s at 4K and decoded 397 tok/s. Its prefill quantizes activations
   to four bits for W4A4, which only Blackwell has, so sm_8x builds refuse the banks.
+- **N-gram copy drafting** (remesis, Ian Ranson). Beside any drafter, a round may verify up to
+  15 tokens copied from earlier prompt, tool-result or output text that the last 12 tokens match
+  (`--ngram-draft-tokens`, `--ngram-min-match`); it is on by default with `--spec` and exact, since
+  the target verifies every copy. An optional RAM archive keeps finished requests' copy sources for
+  later requests of the same `X-NInfer-Draft-Session` (`--ngram-archive-mib`).
+- **A hybrid prefix cache** (Ian Ranson, [Wallawalla47](https://github.com/Wallawalla47/ninfer-custom)).
+  `--use-alt-prefix-caching` swaps the checkpoint catalog for content-addressed 64-token KV blocks
+  shared across requests plus sparse state snapshots, sized from free memory and one
+  `--host-cache-mib` Host budget. Around the default catalog the same work adds opt-in
+  recency eviction with demotion to Host first (`--recency-eviction`), on-demand growth of an
+  answer's Device KV lease (`--kv-lease-growth`), one Host budget for the retention tier
+  (`--host-cache-mib`), automatic message-boundary anchors for rewritten transcripts
+  (`--auto-long-anchors`), and, on by default, the reuse of what an aborted request prefilled and
+  least-recently-used replacement of automatic shared prefixes when the catalog is full.
+- **Admission and eviction** (Gideon Zenz, David Oelfke, Ian Ranson). `--thorough-admission-search`
+  gives a new request's reuse plan up to 250 ms and every candidate, `--value-aware-demote` ranks
+  eviction by what a checkpoint would cost to rebuild, `--concurrent-prefill` admits while others
+  prefill, and `--recover-invariant-failures` keeps serving after an internal invariant fails.
+- **Drafting and sampling** (Gideon Zenz). `--mtp-attention-window N` lets the MTP draft head
+  attend to its first 64 keys and the newest `N` instead of the whole history, so the draft's read
+  stops growing with the context while verification still decides every token. Post-thinking
+  sampling switches a thinking request to its own preset (temperature 0.2) once the reasoning
+  closes, per server (`--post-thinking*`) or per request (a `post_thinking` object).
+- **Serving** (Gideon Zenz, Ian Ranson). `GET /stats` with every Engine counter and the waiting
+  queue, on the main port or a separate `--stats-port`; a terminal dashboard and a wedge watchdog in
+  [`tools/monitor`](tools/monitor/README.md); request-log rotation (`--request-log-max-mib`);
+  `--assistant-prefill`, `--unconstrained-response-format`, `--lenient-assistant-history` and
+  `--derive-session-keys` for clients that need them; Anthropic streams carry the protocol's `ping`
+  event with each heartbeat; grouped `--help` screens, `--log-colours` and a statistics panel
+  (`--log-stats-panel`); the build id in every product binary.
+- **Vision on CPU and position interpolation** (David Oelfke). `--vision-residency cpu` encodes
+  images on CPU threads from host FP32 weights with no device Vision memory, and
+  `--rope-scaling-factor` with `--rope-scaling-original-context` interpolates positions past the
+  native window.
+- **Kernels and conversion** (Ian Ranson, Duncan Betts). Programmatic dependent launches in decode
+  graphs (`-DNINFER_PDL=ON` on compatibility builds), split-KV attention for short prefill steps
+  over long contexts, a general BF16 GEMM fallback, MTP banks of mixed formats, the fused RMSNorm and
+  NVFP4 attention input at every width, and converters for ModelOpt NVFP4/FP8 checkpoints, the
+  Quasar NVFP4 checkpoint and a `grouped_mse` scale search. A native Windows build against a
+  prebuilt vcpkg tree.
+- **Unified Linear templates** (Neroued). The Q4, Q5, Q6 and Q8 A16 Linear templates with sliced-K
+  schedules sit beside this line's routes, and each card takes them only at the widths where two
+  sweeps on an RTX 3090, 4090 and 5090 measured them faster: Q5 from about 8 columns up to 96 (RTX
+  3090), 128 (4090) or 1,024 (5090), 1.5 to 1.7 times as fast over the shapes; Q6 from 4 to 32
+  columns; Q4 from 25 columns; Q8 at widths that differ per card. Q4 decode and verification widths
+  keep this line's kernels. `NINFER_LINEAR_ROUTES=legacy|unified` forces one table.
 - **Engine and serving fixes**: out-of-memory recovery of the worker (David Oelfke's, ported by
   Ian Ranson), `--kv-headroom-mib`, `--cuda-graph-allowance-mib`, `--thinking-budget-message` (Ian
   Ranson); the WebUI's MCP traffic relayed behind `--webui-mcp-proxy`, E8 root codes decoded from

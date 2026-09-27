@@ -117,6 +117,37 @@ From other forks and upstream `master`:
 | Matt Anderson | registers for the wide Q5 split tiles and a two-row kernel from eight columns; an idle Engine fails only the request it cannot place | `ops/linear/q5/`, `runtime/engine/engine_core.h` |
 | [Neroued/ninfer](https://github.com/Neroued/ninfer) `master` | Minnnn's column-band routing of the q4/q5 A16 input projections with one split4 Q5 parent; `NINFER_CUDA_SYNC` for the CUDA synchronization schedule (adubkov, Neroued), which stays at CUDA's default when unset; the accurate SiLU restored in the NVFP4 SwiGLU | `ops/attn_input_proj/q4_q5/`, `ops/gdn_input_proj/q4_q5/`, `core/device.cu`, `ops/linear_swiglu/nvfp4/` |
 
+The September 27 sweep of the maintained forks (Wallawalla47, gzenz, IMGillusion, upstream pull
+requests and `master`), each change re-applied on this tree and opt-in where it moves numbers:
+
+| source | behaviour | where it lives in the tree |
+|---|---|---|
+| remesis, Ian Ranson (Wallawalla47) | n-gram copy drafting beside MTP, DFlash and DFlash2, on with 15 copied tokens whenever `--spec` is set: the copy family keeps its own verification width, neural rounds keep theirs; an optional RAM archive per `X-NInfer-Draft-Session` | `models/qwen3_5/program/ngram_proposer.h`, `speculative/lookup_draft.h`, `product/speculative_options.h`, `models/qwen3_5/ngram.{h,cpp}` |
+| Ian Ranson (Wallawalla47) | the hybrid prefix cache (`--use-alt-prefix-caching`): content-addressed 64-token KV blocks shared across requests plus sparse state snapshots, one Host slab pool sized by `--host-cache-mib`; `--use-original-prefix-caching` names the default | `runtime/engine/context_cache/hybrid_resource_manager.h`, `models/qwen3_5/program/prefix/hybrid_*`, `docs/maintainer/hybrid-prefix-cache-spec.md` |
+| Ian Ranson (Wallawalla47), Gideon Zenz | around the checkpoint catalog: `--recency-eviction` (recency ladder, demotion to Host first), `--kv-lease-growth` (an answer's Device KV lease grows on demand), `--host-cache-mib` (one Host budget), `--auto-long-anchors`, a seal-window claim for materialization and shared captures, least-recently-used replacement of automatic shared prefixes, the shared catalog sized for one request's candidates, salvage of what an aborted request prefilled | `runtime/engine/context_cache/{resource_manager,materialization_planner,seal_window_claim}.h`, `models/qwen3_5/program/transactions/`, `planning/startup.cpp` |
+| Gideon Zenz | `--thorough-admission-search` (up to 250 ms and every candidate for a new request's plan), `--value-aware-demote` (eviction ranked by rebuild cost), `NINFER_MAT_DEBUG` traces | `runtime/engine/context_cache/{materialization_budget,materialization_planner}.h`, `models/qwen3_5/program/planning/pressure_value_ranking.h` |
+| David Oelfke, Ian Ranson | `--concurrent-prefill`; worker recovery that re-arms admission, `--recover-invariant-failures` | `runtime/engine/engine_core.h` |
+| Gideon Zenz | `--mtp-attention-window`: the MTP draft attends to its sink page and newest window through a rebound page table (`paged_kv_window_rows`), verification keeps full attention | `ops/{kernel,launcher,wrapper}/paged_kv_window*`, `models/qwen3_5/execution/text.cpp`, `planning/startup.cpp` |
+| Gideon Zenz | post-thinking sampling: a thinking request's lane switches to its own preset once reasoning closes (`--post-thinking*`, a `post_thinking` request object) | `runtime/engine/{engine.cpp,engine_core.h}`, `models/qwen3_5/program/decode.cpp`, `models/qwen3_5/frontend/output_session.cpp`, `product/post_thinking_options.h`, `serve/` |
+| Gideon Zenz | `GET /stats` with the waiting queue and `--stats-port`; `tools/monitor` dashboard and wedge watchdog; request-log rotation; `--derive-session-keys`; Anthropic `ping` events with each heartbeat; `--lenient-assistant-history`; a developer message retried as system when a template refuses the role; `tools/longctx_recall_probe.py` | `serve/{load_report,http_server,http_transport,translate,openai_responses_request}.cpp`, `models/qwen3_5/frontend/chat_template.cpp`, `tools/` |
+| David Oelfke | CPU Vision (`--vision-residency cpu`): the tower in FP32 on host threads with packed token panels and key-blocked attention, no device Vision memory; `--rope-scaling-factor` and `--rope-scaling-original-context` interpolate positions past a threshold in the RoPE kernel | `models/qwen3_5/{load,execution}/vision_cpu.*`, `ops/kernel/rope.cuh`, `product/rope_yarn_options.h` |
+| Ian Ranson (Wallawalla47) | `--assistant-prefill`, `--unconstrained-response-format`, grouped `--help`, the build id, `--log-colours`, `--log-stats-panel`, levelled diagnostics records, a native Windows build | `serve/`, `apps/`, `product/logging/`, `CMakeLists.txt` |
+| Ian Ranson (Wallawalla47) | decode-graph kernels launched as programmatic dependents (`NINFER_PDL` on compatibility builds, always on native ones), split-KV attention for short prefill steps over long contexts, a runtime-shape BF16 GEMM fallback, MTP banks of mixed formats, measured CUDA Graph memory in `server_start` | `ops/`, `models/qwen3_5/program/graphs.cpp`, `core/device.cu` |
+| Ian Ranson (Wallawalla47) | ModelOpt NVFP4/FP8 and Quasar NVFP4 conversion, the `grouped_mse` scale search | `tools/convert/` |
+| MGS Creativa, IMGillusion, Alexey Dubkov, Duncan Betts, giveen | a Vision loan takes only pages no reservation needs; LRU disk-tier eviction and positioned I/O; a quoted parameter closer stays inside its value; the fused RMSNorm and NVFP4 attention input at every width; the shared catalog default | `runtime/engine/context_cache/`, `core/disk_kv_*`, `models/qwen3_5/frontend/tool_call_parser.cpp`, `ops/attn_input_proj/nvfp4/` |
+| [Neroued/ninfer](https://github.com/Neroued/ninfer) `master` | the unified Q4, Q5, Q6 and Q8 A16 Linear templates with sliced-K schedules, beside this line's routes and kernels; each card class takes them only in the width bands where two sweeps on an RTX 3090, 4090 and 5090 measured them faster, and `NINFER_LINEAR_ROUTES=legacy\|unified` forces one table | `ops/linear/common/route_table.{h,cpp}`, `ops/linear/q{4,5,6,8}/` |
+| this line, found in the sweep | the FP8 small-T attention reduces its partials through the shared reducer (its own copy faulted on sm_120a, also on `master`); the GDN record kernel runs window by window past 16 columns; the stale private reclaim follows `--recency-eviction`'s order and counts the checkpoints it drops; the issue #251 reclaim spares the shared prefix a capture extends | `ops/softmax_attention/dense/causal_cache/small_t_fp8.cu`, `ops/linear_attention/gated_delta_net/recurrent.cuh`, `runtime/engine/context_cache/resource_manager.h` |
+
+Assessed in this sweep and not taken: the per-search planning window restart, whose search the
+thorough mode already bounds; the gzenz v2 engine's host-KV safety net, units, fit gate and state
+leases, which this line's Host and disk tiers and eviction options cover; moving the turn-closure
+checkpoint to the last stripped turn, which the next request can no longer reuse byte for byte;
+an edit of the froggeric template's instructions; the QUASAR binding overrides and the weights
+profile switch, which v3 artifacts make unnecessary; the small-T page-ID enlargement, covered by
+the block-table fallback. The PackGQA prefill kernel waits for measurements, as do the rest of
+Neroued's wave (the FP8, NVFP4 and BF16 template ports, the two-stage GDN kernels); Kimi Delta
+Attention has no model here.
+
 The disk tier differs from IMGillusion's in one place: its abandon path released borrowed memory
 while write tickets were still pending, which could store a page whose bytes changed under a valid
 CRC; here every submitted ticket is awaited before an owner's memory goes. The Windows DirectStorage
@@ -130,9 +161,8 @@ Assessed and not taken:
 - Wallawalla47's `--tolerant-tool-calls` recovery overlaps the recovery pass taken from Tertium,
   and its report of truncation ahead of a tool call would stop an agent harness from retrying the
   malformed call that recovery hands it.
-- Wallawalla47's Device KV lease work (on-demand lease growth, lease reclaim, recency-ranked
-  pressure ladders, seal-window claims) belongs to a different resource model than this line's
-  reserved entitlements; its split-KV page floor is covered here by the block-table fallback.
+- Wallawalla47's split-KV page floor, covered here by the block-table fallback; its lease work is
+  taken above behind options.
 - #292's Q5 K-split MMA and Q4 staging ring: the base carries its own small-T Q5 MMA and a
   multi-stage Q4 ring, with route boundaries re-measured on an RTX 3090; #292's are tuned on an
   RTX 5090.
@@ -216,6 +246,18 @@ and have not been run.
   every storage and the one-token profiles, and 21 server starts per card across KV storages, MTP
   widths 3 to 15 (adaptive included), DFlash2, four lanes and small BF16 windows; four 60,000-token
   needle documents at once returned all twelve codes on an RTX 5090.
+- The September 27 sweep, on the final code: the full `ctest` on an RTX 3090 (held at 220 W), RTX
+  4090 and RTX 5090 with the Qwen3.8 artifact, where only the MoE and DFlash v1 real-model tests
+  fail, for want of their artifacts; on the RTX 5090, greedy answers byte-identical to `master` for
+  prose, code, a repeated list and Chinese, with and without MTP, and the same 33-token natural stop
+  in the stop-chat copy; n-gram copy drafting left prose decode where it was (48.9 against 49.1
+  tok/s on the 3090, 96.7 against 96.6 on the 4090, 159.6 against 159.5 on the 5090, under MTP;
+  unchanged under DFlash2) and copied code about three times as fast under MTP and twice as fast
+  under DFlash2 on every card; `--mtp-attention-window` 1024 and 256 answered as full attention
+  did; five serve checks per card; CUDA Graphs stayed within their allowance (3.5 to 17% of it on
+  the RTX 5090, 9 to 67% on the 3090 and 4090); the `NINFER_PDL` build answered as the default
+  build at the same speed on the RTX 5090. The Linear route bands come from two sweeps per card of
+  every shape with both tables, and a third sweep of the default routes.
 - sm_120a: on an RTX 5090 both the default compatibility build and the native build
   (`NINFER_SM120_NATIVE`) pass `ctest` (169 tests), and the native build converts and serves the
   RedHatAI Qwen3.6-35B-A3B NVFP4 checkpoint.
