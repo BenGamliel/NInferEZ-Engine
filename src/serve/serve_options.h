@@ -95,6 +95,10 @@ struct ServeOptions {
     // prompts merely start alike converge on the same frontier. Off by default: it adds host-side
     // candidate work to every request and only pays for itself on a multi-tenant preamble.
     bool auto_prefix_grid = false;
+    // --derive-session-keys: a request that names no session (Chat Completions, Messages) gets
+    // one derived from its instructions and first user message, so its conversation keeps a
+    // session lineage and LiveSession retention like a Responses conversation.
+    bool derive_session_keys = false;
     std::optional<bool> enable_thinking;
     std::optional<bool> preserve_thinking;
     std::optional<std::uint32_t> default_thinking_budget;

@@ -38,4 +38,10 @@ ninfer::RequestOptions to_request_options(const GenerationRequest& req, const Se
                                           const ResolvedPromptSemantics& semantics,
                                           bool allow_prefix_reuse);
 
+// A session key for a request that names none (--derive-session-keys): FNV-1a over the text of
+// the instruction messages and of the first user message, which stay fixed for the life of a
+// conversation. A client compaction rewrites the first user message and so starts a new key.
+// A conversation without user text gets none.
+std::optional<std::string> derived_session_key(const GenerationRequest& req);
+
 } // namespace ninfer::serve

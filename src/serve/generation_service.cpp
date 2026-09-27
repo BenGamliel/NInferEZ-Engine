@@ -434,6 +434,10 @@ PreparedRequest GenerationService::prepare_impl(const GenerationRequest& incomin
             protocol_allows_engine_automatic;
         input.context_cache.allow_engine_prefix_grid =
             input.context_cache.allow_engine_prefix_grid || options_.auto_prefix_grid;
+        if (options_.derive_session_keys && !input.context_cache.session_key &&
+            cache_participation == CacheParticipation::ReadWrite) {
+            input.context_cache.session_key = derived_session_key(request);
+        }
         trim_cache_markers(input.context_cache.markers,
                            engine_->options().context_cache.max_cache_markers_per_request.value());
         prepared.acquisition_seconds =

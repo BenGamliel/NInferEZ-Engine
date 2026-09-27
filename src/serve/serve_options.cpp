@@ -202,6 +202,10 @@ std::string serve_usage_text(const char* argv0) {
            "                                callers whose prompts start alike share a prefix\n"
            "                                without a client hint; a grid frontier is\n"
            "                                published once two callers ask for it\n"
+           "  --derive-session-keys         give a request without a session key one derived\n"
+           "                                from its instructions and first user message,\n"
+           "                                so the conversation keeps a session lineage\n"
+           "                                and live-session retention (default off)\n"
            "  --context-cache-policy default|rolling\n"
            "                                rolling: a capture that extends a resident\n"
            "                                checkpoint inherits its demand, for one\n"
@@ -852,6 +856,9 @@ ServeOptions parse_serve_options(int argc, char** argv) {
             options.cuda_graph_allowance_mib = mib;
         } else if (arg == "--no-prefix-reuse") {
             options.allow_prefix_reuse = false;
+        } else if (arg == "--derive-session-keys") {
+            legacy_cache_flag           = "--derive-session-keys";
+            options.derive_session_keys = true;
         } else if (arg == "--auto-prefix-grid") {
             legacy_cache_flag        = "--auto-prefix-grid";
             options.auto_prefix_grid = true;
@@ -1029,6 +1036,10 @@ ServeOptions parse_serve_options(int argc, char** argv) {
         if (options.auto_prefix_grid) {
             throw std::invalid_argument(
                 "--no-prefix-reuse cannot be combined with --auto-prefix-grid");
+        }
+        if (options.derive_session_keys) {
+            throw std::invalid_argument(
+                "--no-prefix-reuse cannot be combined with --derive-session-keys");
         }
         if (!options.context_cache.disk_kv_path.empty()) {
             throw std::invalid_argument("--no-prefix-reuse cannot be combined with --disk-kv-path");

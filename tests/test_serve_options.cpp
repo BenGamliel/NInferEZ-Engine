@@ -635,6 +635,7 @@ int main() {
                                                {"--long-anchor-spacing", "0"},
                                                {"--auto-long-anchors"},
                                                {"--auto-prefix-grid"},
+                                               {"--derive-session-keys"},
                                                {"--context-cache-policy", "rolling"},
                                                {"--release-diverged-checkpoints"},
                                                {"--thorough-admission-search"},
@@ -897,6 +898,7 @@ int main() {
                                         "--default-max-tokens",
                                         "--default-reasoning-effort",
                                         "--default-thinking-budget",
+                                        "--derive-session-keys",
                                         "--device",
                                         "--device-profile",
                                         "--device-profile-path",
@@ -1256,6 +1258,50 @@ int main() {
                 const std::string message = std::string("--rope-scaling-factor accepted ") + bad;
                 failures += check(rejected, message.c_str());
             }
+        }
+        {
+            failures += check(parse({"ninfer-serve", "model.ninfer", "--derive-session-keys"})
+                                      .derive_session_keys &&
+                                  !parse({"ninfer-serve", "model.ninfer"}).derive_session_keys,
+                              "--derive-session-keys was not an off-by-default switch");
+            bool rejected = false;
+            try {
+                (void)parse(
+                    {"ninfer-serve", "model.ninfer", "--no-prefix-reuse", "--derive-session-keys"});
+            } catch (const std::invalid_argument&) { rejected = true; }
+            failures += check(rejected, "--derive-session-keys accepted without prefix reuse");
+
+            const auto turn = [](ninfer::ChatRole role, std::string text) {
+                ChatTurn out;
+                out.role = role;
+                ContentPart part;
+                part.text = std::move(text);
+                out.content.push_back(std::move(part));
+                return out;
+            };
+            GenerationRequest first;
+            first.messages          = {turn(ninfer::ChatRole::System, "be brief"),
+                                       turn(ninfer::ChatRole::User, "hello")};
+            GenerationRequest later = first;
+            later.messages.push_back(turn(ninfer::ChatRole::Assistant, "hi"));
+            later.messages.push_back(turn(ninfer::ChatRole::User, "and more"));
+            GenerationRequest other = first;
+            other.messages[1]       = turn(ninfer::ChatRole::User, "goodbye");
+            GenerationRequest image = first;
+            ContentPart picture;
+            picture.kind = ContentKind::Image;
+            image.messages[1].content.push_back(picture);
+            const auto key = derived_session_key(first);
+            failures +=
+                check(key && key->size() == 19 && key->starts_with("cs-") &&
+                          derived_session_key(later) == key && derived_session_key(image) == key &&
+                          derived_session_key(other) != key,
+                      "a derived session key is not stable per conversation");
+            GenerationRequest silent;
+            silent.messages = {turn(ninfer::ChatRole::System, "be brief"),
+                               turn(ninfer::ChatRole::User, "")};
+            failures += check(!derived_session_key(silent),
+                              "a conversation without user text got a derived session key");
         }
         {
             failures += check(!parse({"ninfer-serve", "model.ninfer"}).post_thinking_overrides,

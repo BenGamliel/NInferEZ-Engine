@@ -4,6 +4,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -381,6 +382,37 @@ ninfer::PromptInput to_prompt_input(const GenerationRequest& request,
     }
     product::apply_structured_output_instruction(input, request.structured_output);
     return input;
+}
+
+std::optional<std::string> derived_session_key(const GenerationRequest& request) {
+    const auto append_text = [](std::string& out, const ChatTurn& turn) {
+        for (const ContentPart& part : turn.content) {
+            if (part.kind == ContentKind::Text) { out += part.text; }
+        }
+    };
+    std::string preimage;
+    for (const ChatTurn& turn : request.messages) {
+        if (turn.role == ChatRole::System || turn.role == ChatRole::Developer) {
+            append_text(preimage, turn);
+            preimage += '\x1f';
+        }
+    }
+    const auto first_user =
+        std::find_if(request.messages.begin(), request.messages.end(),
+                     [](const ChatTurn& turn) { return turn.role == ChatRole::User; });
+    if (first_user == request.messages.end()) { return std::nullopt; }
+    const std::size_t instructions = preimage.size();
+    append_text(preimage, *first_user);
+    if (preimage.size() == instructions) { return std::nullopt; }
+    std::uint64_t hash = 1469598103934665603ULL;
+    for (const char c : preimage) {
+        hash ^= static_cast<unsigned char>(c);
+        hash *= 1099511628211ULL;
+    }
+    static constexpr char kHex[] = "0123456789abcdef";
+    std::string key              = "cs-";
+    for (int shift = 60; shift >= 0; shift -= 4) { key += kHex[(hash >> shift) & 0xFU]; }
+    return key;
 }
 
 ninfer::RequestOptions to_request_options(const GenerationRequest& request,
