@@ -135,6 +135,19 @@ int main() {
     failures += check(
         !Json::parse(make_load_report(capacity, sample)).at("requests").contains("peak_admitted"),
         "the load report grew the stats-only ingress peak");
+    failures +=
+        check(stats.at("queue").at("entries").empty(), "an empty queue reported waiting entries");
+    sample.stats.queue[0]      = {.request_id = 41, .wait_seconds = 2.5};
+    sample.stats.queue[1]      = {.request_id = 43, .wait_seconds = 0.5};
+    sample.stats.queue_entries = 2;
+    const Json queued          = Json::parse(make_stats_report(capacity, sample)).at("queue");
+    failures += check(queued.at("depth") == sample.stats.waiting_requests &&
+                          queued.at("entries").size() == 2 &&
+                          queued.at("entries")[0].at("request_id") == 41 &&
+                          queued.at("entries")[0].at("position") == 1 &&
+                          queued.at("entries")[0].at("wait_seconds") == 2.5 &&
+                          queued.at("entries")[1].at("position") == 2,
+                      "the stats report did not list the waiting requests in order");
 
     if (failures != 0) { std::cerr << failures << " load report check(s) failed\n"; }
     return failures == 0 ? 0 : 1;

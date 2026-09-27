@@ -580,6 +580,15 @@ private:
         {
             std::lock_guard lock(queue_mutex_);
             snapshot.waiting_requests = static_cast<std::uint32_t>(pending_.size());
+            const Clock::time_point now = Clock::now();
+            for (const auto& request : pending_) {
+                if (snapshot.queue_entries == RuntimeStats::kQueueReportCap) { break; }
+                snapshot.queue[snapshot.queue_entries++] = RuntimeStats::QueueEntry{
+                    .request_id   = request->id,
+                    .wait_seconds = std::chrono::duration<double>(now - request->submitted).count(),
+                };
+            }
+            if (!pending_.empty()) { last_queue_publication_ = now; }
         }
         snapshot.prefilling_requests = 0;
         snapshot.materializing_requests = materializing_.has_value() ? 1U : 0U;
@@ -2297,6 +2306,12 @@ private:
                 set_host_work_class(HostWorkClass::Control);
                 HostPhaseMeasurement boundary = begin_host_phase();
                 const bool have_pending       = expire_pending_requests();
+                // A pure queue wait changes no state that would publish, so the waits /stats
+                // reports are refreshed here.
+                if (have_pending &&
+                    Clock::now() - last_queue_publication_ >= std::chrono::seconds(1)) {
+                    publish_runtime_stats();
+                }
                 (void)progress_context_transaction(have_pending);
                 (void)settle_terminal_requests(boundary);
                 const auto cancelled_at_boundary = snapshot_cancellations();
@@ -2473,6 +2488,8 @@ private:
     std::array<std::uint32_t, kMaximumConcurrency> current_decode_lanes_{};
     std::size_t current_decode_lane_count_ = 0;
     RuntimeStats cumulative_stats_;
+    // Worker-thread only: when a snapshot last carried a non-empty queue.
+    Clock::time_point last_queue_publication_{};
     RuntimeStats published_stats_;
     bool stopping_ = false;
     bool failed_   = false;

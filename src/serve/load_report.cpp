@@ -101,6 +101,13 @@ std::string make_stats_report(const LoadCapacity& capacity, const LoadSample& sa
                               "host_work", "context_cache"}) {
         report[block] = std::move(cumulative.at(block));
     }
+    Json entries = Json::array();
+    for (std::uint32_t i = 0; i < stats.queue_entries; ++i) {
+        entries.push_back(Json{{"request_id", stats.queue[i].request_id},
+                               {"position", i + 1},
+                               {"wait_seconds", stats.queue[i].wait_seconds}});
+    }
+    report["queue"] = Json{{"depth", stats.waiting_requests}, {"entries", std::move(entries)}};
     return report.dump();
 }
 

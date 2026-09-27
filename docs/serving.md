@@ -352,8 +352,11 @@ curl http://127.0.0.1:8080/v1/load -H 'Authorization: Bearer local-secret'
 most requests admitted at once since startup, and the Engine's counters since startup in the shape of
 the request log's `throughput` record (see [Structured request log](#structured-request-log)):
 `tokens`, `throughput_tokens_per_second` averaged over the uptime, `scheduler`, `decode_batch`,
-`host_work` and the `context_cache` counters and gauges. It needs the API key like `/v1/load` and,
-like it, reads only published snapshots. Dashboards poll it, or the same route on `--stats-port`.
+`host_work` and the `context_cache` counters and gauges. `queue` holds `depth`, the number of
+requests waiting for admission, and `entries`: the first 16 of them in submission order, each with
+its Engine `request_id`, `position` and `wait_seconds`, refreshed at least once a second while
+requests wait. It needs the API key like `/v1/load` and, like it, reads only published snapshots.
+Dashboards poll it, or the same route on `--stats-port`.
 
 ### Metrics
 

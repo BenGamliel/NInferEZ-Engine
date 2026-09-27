@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -1333,6 +1334,18 @@ struct RuntimeStats {
     std::uint32_t prefilling_requests       = 0;
     std::uint32_t decode_ready_requests     = 0;
     std::uint32_t waiting_requests          = 0;
+
+    // The first kQueueReportCap waiting requests in submission order, with how long each had
+    // waited when the snapshot was published; the Engine republishes at least once a second
+    // while requests wait.
+    struct QueueEntry {
+        std::uint64_t request_id = 0;
+        double wait_seconds      = 0.0;
+    };
+
+    static constexpr std::size_t kQueueReportCap = 16;
+    std::array<QueueEntry, kQueueReportCap> queue{};
+    std::uint32_t queue_entries             = 0;
     std::uint32_t materializing_requests    = 0;
     std::uint32_t capture_pending_requests  = 0;
     std::uint32_t terminal_pending_requests = 0;
