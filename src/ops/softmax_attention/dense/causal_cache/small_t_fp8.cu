@@ -78,19 +78,21 @@ void launch_fp8_reduce(const Tensor& positions, const CausalSmallTInvocation& in
     constexpr int Block = 256;
 
     constexpr int DChunk = Geometry::QHeads == 24 ? 256 : 64;
-    const auto launch    = [&]<bool Offset>() {
+    // The shared reducer: its non-INT8 split tier is the quantized one, and a window of zero keys
+    // yields zeros through either count.
+    const auto launch = [&]<bool Offset>() {
         const dim3 grid(Geometry::QHeads, div_up(kCausalHeadDim, DChunk),
-                           invocation.width * invocation.batch_size);
-        causal_attention_small_t_fp8_reduce_output_kernel<Geometry, DChunk, MultiBatch, Masked,
-                                                             Offset><<<grid, Block, 0, stream>>>(
+                        invocation.width * invocation.batch_size);
+        causal_attention_small_t_reduce_output_kernel<Geometry, DChunk, false, MultiBatch, Masked,
+                                                      Offset><<<grid, Block, 0, stream>>>(
             static_cast<const float*>(partial_acc.data), static_cast<const float*>(partial_m.data),
             static_cast<const float*>(partial_l.data),
             static_cast<const std::int32_t*>(positions.data),
             invocation.valid_columns == nullptr
-                   ? nullptr
-                   : static_cast<const std::int32_t*>(invocation.valid_columns->data),
+                ? nullptr
+                : static_cast<const std::int32_t*>(invocation.valid_columns->data),
             invocation.width, invocation.full_width, invocation.column_begin, invocation.batch_size,
-            splits, static_cast<__nv_bfloat16*>(out.data));
+            splits, 0, static_cast<__nv_bfloat16*>(out.data), nullptr);
     };
     if (invocation.column_begin == 0)
         launch.template operator()<false>();
