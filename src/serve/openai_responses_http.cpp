@@ -244,7 +244,8 @@ void HttpServer::handle_responses(const httplib::Request& req, httplib::Response
     const std::string id = new_openai_response_id();
     try {
         RequestLimits limits;
-        limits.default_max_tokens = options_.default_max_tokens;
+        limits.default_max_tokens        = options_.default_max_tokens;
+        limits.lenient_assistant_history = options_.lenient_assistant_history;
         const auto body           = parse_json_body(req);
         request                   = parse_openai_responses_create_request(body, limits);
         validate_openai_model(request.prompt.model, public_model_id_);
@@ -519,7 +520,8 @@ void HttpServer::handle_responses(const httplib::Request& req, httplib::Response
 void HttpServer::handle_response_input_tokens(const httplib::Request& req, httplib::Response& res) {
     try {
         RequestLimits limits;
-        limits.default_max_tokens = options_.default_max_tokens;
+        limits.default_max_tokens        = options_.default_max_tokens;
+        limits.lenient_assistant_history = options_.lenient_assistant_history;
         OpenAIResponsesPromptRequest request =
             parse_openai_responses_input_tokens_request(parse_json_body(req), limits);
         validate_openai_model(request.model, public_model_id_);

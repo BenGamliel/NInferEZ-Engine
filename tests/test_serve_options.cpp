@@ -925,6 +925,7 @@ int main() {
                                         "--kv-dtype",
                                         "--kv-headroom-mib",
                                         "--kv-lease-growth",
+                                        "--lenient-assistant-history",
                                         "--lm-head-draft",
                                         "--lm-head-q4",
                                         "--lm-head-q6",

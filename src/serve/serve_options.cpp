@@ -341,6 +341,9 @@ std::string serve_usage_text(const char* argv0) {
            "  --assistant-prefill           continue a Chat Completions request's trailing\n"
            "                                assistant message in place, as /v1/messages\n"
            "                                does; needs thinking disabled\n"
+           "  --lenient-assistant-history   accept Responses input whose assistant text or\n"
+           "                                reasoning follows function_call Items; it joins\n"
+           "                                that turn, rendered before its calls\n"
            "  --first-token-logprobs        accept Chat Completions top_logprobs\n"
            "                                (non-streaming) and report the first token's log\n"
            "                                probability with its alternatives\n"
@@ -856,6 +859,8 @@ ServeOptions parse_serve_options(int argc, char** argv) {
             options.cuda_graph_allowance_mib = mib;
         } else if (arg == "--no-prefix-reuse") {
             options.allow_prefix_reuse = false;
+        } else if (arg == "--lenient-assistant-history") {
+            options.lenient_assistant_history = true;
         } else if (arg == "--derive-session-keys") {
             legacy_cache_flag           = "--derive-session-keys";
             options.derive_session_keys = true;

@@ -53,6 +53,9 @@ struct RequestLimits {
     bool first_token_logprobs = false;
     // Continue a trailing Chat Completions assistant message in place (--assistant-prefill).
     bool assistant_prefill = false;
+    // Responses input: assistant message content or reasoning after function_call Items joins
+    // the run's assistant turn instead of failing (--lenient-assistant-history).
+    bool lenient_assistant_history = false;
 };
 
 enum class ContentKind {

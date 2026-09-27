@@ -576,6 +576,21 @@ int test_assistant_item_boundaries_and_errors() {
                               "assistant message content cannot follow function_call Items") !=
                               std::string::npos,
                       "assistant content after calls was silently reordered");
+    RequestLimits lenient                     = limits();
+    lenient.lenient_assistant_history         = true;
+    const OpenAIResponsesCreateRequest joined = parse_openai_responses_create_request(
+        Json{{"model", "m"},
+             {"input", Json::array({reasoning, call, first, reasoning,
+                                    Json{{"type", "function_call_output"},
+                                         {"call_id", "call_1"},
+                                         {"output", "ok"}}})}},
+        lenient);
+    failures += check(joined.prompt.input_turns.size() == 2 &&
+                          joined.prompt.input_turns[0].tool_calls.size() == 1 &&
+                          joined.prompt.input_turns[0].content.size() == 1 &&
+                          joined.prompt.input_turns[0].content[0].text == "first " &&
+                          joined.prompt.input_turns[0].reasoning_content == "thought\n\nthought",
+                      "--lenient-assistant-history did not join text and reasoning after calls");
     const ApiError duplicate_reasoning = rejected(Json::array({reasoning, reasoning}));
     failures +=
         check(duplicate_reasoning.code == "invalid_assistant_history" &&

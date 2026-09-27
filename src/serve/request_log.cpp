@@ -704,6 +704,7 @@ std::string format_server_start_json(
              {"unconstrained_response_format", options.unconstrained_response_format},
              {"assistant_prefill", options.assistant_prefill},
              {"derive_session_keys", options.derive_session_keys},
+             {"lenient_assistant_history", options.lenient_assistant_history},
              {"max_request_bytes", options.max_request_bytes},
              {"media_cache_bytes", options.media_cache_bytes},
              {"media_live_bytes", options.media_live_bytes},

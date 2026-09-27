@@ -99,6 +99,9 @@ struct ServeOptions {
     // one derived from its instructions and first user message, so its conversation keeps a
     // session lineage and LiveSession retention like a Responses conversation.
     bool derive_session_keys = false;
+    // --lenient-assistant-history: Responses input whose assistant content or reasoning follows
+    // function_call Items joins that run's turn instead of failing with invalid_assistant_history.
+    bool lenient_assistant_history = false;
     std::optional<bool> enable_thinking;
     std::optional<bool> preserve_thinking;
     std::optional<std::uint32_t> default_thinking_budget;

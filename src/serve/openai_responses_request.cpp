@@ -563,7 +563,7 @@ enum class AssistantInputPhase {
 }
 
 struct AssistantInputRun {
-    AssistantInputRun() { reset(); }
+    explicit AssistantInputRun(bool lenient) : lenient_(lenient) { reset(); }
 
     void append_reasoning(std::string reasoning, std::size_t index) {
         switch (phase) {
@@ -576,7 +576,12 @@ struct AssistantInputRun {
         case AssistantInputPhase::Content:
             invalid_assistant_history(index, "reasoning cannot follow assistant message content");
         case AssistantInputPhase::Calls:
-            invalid_assistant_history(index, "reasoning cannot follow function_call Items");
+            if (!lenient_) {
+                invalid_assistant_history(index, "reasoning cannot follow function_call Items");
+            }
+            if (!turn.reasoning_content.empty()) { turn.reasoning_content += "\n\n"; }
+            turn.reasoning_content += reasoning;
+            return;
         }
         throw std::logic_error("unreachable assistant input phase");
     }
@@ -586,8 +591,15 @@ struct AssistantInputRun {
             throw std::logic_error("assistant input run received a non-assistant message");
         }
         if (phase == AssistantInputPhase::Calls) {
-            invalid_assistant_history(
-                index, "assistant message content cannot follow function_call Items");
+            if (!lenient_) {
+                invalid_assistant_history(
+                    index, "assistant message content cannot follow function_call Items");
+            }
+            // The turn renders its content before its calls, so later calls still join it.
+            turn.content.insert(turn.content.end(),
+                                std::make_move_iterator(message.content.begin()),
+                                std::make_move_iterator(message.content.end()));
+            return;
         }
         turn.content.insert(turn.content.end(), std::make_move_iterator(message.content.begin()),
                             std::make_move_iterator(message.content.end()));
@@ -616,10 +628,12 @@ private:
 
     ChatTurn turn;
     AssistantInputPhase phase = AssistantInputPhase::Empty;
+    bool lenient_             = false;
 };
 
 void parse_input(const Json& input, OpenAIResponsesPromptRequest& out,
-                 std::unordered_map<std::string, OpenAIResponsesFunctionIdentity>& identities) {
+                 std::unordered_map<std::string, OpenAIResponsesFunctionIdentity>& identities,
+                 bool lenient_assistant_history) {
     Json values;
     if (input.is_string()) {
         values = Json::array({Json{{"type", "message"}, {"role", "user"}, {"content", input}}});
@@ -629,7 +643,7 @@ void parse_input(const Json& input, OpenAIResponsesPromptRequest& out,
         bad_request("input must be a string or an array of Items", "input");
     }
 
-    AssistantInputRun assistant;
+    AssistantInputRun assistant(lenient_assistant_history);
     std::size_t breakpoint_count = 0;
     std::unordered_set<std::string> item_ids;
     for (std::size_t index = 0; index < values.size(); ++index) {
@@ -1090,7 +1104,8 @@ ParsedPromptFields parse_prompt_fields(const Json& body, const RequestLimits& li
     }
     out.prompt.model = body.at("model").get<std::string>();
     if (body.contains("input") && !body.at("input").is_null()) {
-        parse_input(body.at("input"), out.prompt, out.tool_identities);
+        parse_input(body.at("input"), out.prompt, out.tool_identities,
+                    limits.lenient_assistant_history);
     }
     if (body.contains("instructions") && !body.at("instructions").is_null()) {
         if (!body.at("instructions").is_string()) {
