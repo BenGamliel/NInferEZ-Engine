@@ -47,10 +47,16 @@ public:
 
     static constexpr std::chrono::seconds kHeartbeatInterval{5};
     static constexpr std::string_view kHeartbeatComment = ": keep-alive\n\n";
+    // Anthropic defines a `ping` stream event that clients skip. Unlike a comment it is an event,
+    // so it also satisfies a client that abandons a queued request after waiting for its first
+    // event.
+    static constexpr std::string_view kHeartbeatAnthropic =
+        ": keep-alive\n\nevent: ping\ndata: {\"type\":\"ping\"}\n\n";
 
     explicit SseTransport(httplib::DataSink& sink, std::atomic<bool>& cancelled,
                           Clock::duration heartbeat_interval = kHeartbeatInterval,
-                          Clock::time_point now              = Clock::now());
+                          Clock::time_point now              = Clock::now(),
+                          std::string_view heartbeat         = kHeartbeatComment);
 
     void write(std::string_view item, Clock::time_point now = Clock::now());
     void write(const std::vector<std::string>& items, Clock::time_point now = Clock::now());
@@ -66,6 +72,7 @@ private:
     httplib::DataSink& sink_;
     std::atomic<bool>& cancelled_;
     Clock::duration heartbeat_interval_;
+    std::string_view heartbeat_;
     Clock::time_point last_write_;
 };
 

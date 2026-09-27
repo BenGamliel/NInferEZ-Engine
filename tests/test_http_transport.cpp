@@ -68,6 +68,7 @@ int test_sse_transport() {
     writable = false;
     failures += check(transport.poll(start + 16s) && cancelled,
                       "unwritable SSE transport did not cancel its request");
+
     bool cancelled_write_threw = false;
     try {
         transport.write("data: unreachable\n\n", start + 16s);
@@ -98,6 +99,21 @@ int test_sse_transport() {
     SseTransport released(sink, releaser_cancelled, 5s, start);
     failures += check(released.poll(start),
                       "response resource cancellation was not observed by SSE transport");
+
+    std::vector<std::string> pings;
+    httplib::DataSink ping_sink;
+    ping_sink.write = [&](const char* data, std::size_t size) {
+        pings.emplace_back(data, size);
+        return true;
+    };
+    ping_sink.is_writable = [] { return true; };
+    std::atomic<bool> anthropic_cancelled{false};
+    SseTransport anthropic(ping_sink, anthropic_cancelled, 5s, start,
+                           SseTransport::kHeartbeatAnthropic);
+    failures += check(!anthropic.poll(start + 5s) && pings.size() == 1 &&
+                          pings[0].starts_with(SseTransport::kHeartbeatComment) &&
+                          pings[0].ends_with("event: ping\ndata: {\"type\":\"ping\"}\n\n"),
+                      "the Anthropic heartbeat did not carry the comment and a ping event");
     return failures;
 }
 

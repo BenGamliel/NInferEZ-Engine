@@ -146,7 +146,9 @@ void HttpServer::handle_messages(const httplib::Request& req, httplib::Response&
                     sink.done();
                     return true;
                 }
-                SseTransport transport(sink, stream->cancelled);
+                SseTransport transport(sink, stream->cancelled, SseTransport::kHeartbeatInterval,
+                                       SseTransport::Clock::now(),
+                                       SseTransport::kHeartbeatAnthropic);
                 const auto send_error = [&](const ApiError& error) {
                     try {
                         if (!encoder->started()) {
