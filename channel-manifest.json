@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "product": "NInferEZ Engine",
+  "updatedAt": "2026-09-28T00:00:00Z",
+  "packages": [
+    {
+      "engineVersion": "0.1.0-preview.1",
+      "contractVersion": 1,
+      "platform": "windows-x64",
+      "cudaArchitecture": "sm120a",
+      "gpuModels": [
+        "NVIDIA GeForce RTX 5090",
+        "NVIDIA RTX PRO 6000 Blackwell"
+      ],
+      "channel": "preview",
+      "qualification": "build-verified-preview",
+      "codeSigned": false,
+      "fileName": "NInferEZ-Engine-0.1.0-preview.1-sm120a-windows-x64.zip",
+      "sizeBytes": 1112591312,
+      "sha256": "fb13c4431856b9f60c8f9feefd1937ababbb82e9658547404bb55e153eb35236",
+      "url": "https://github.com/BenGamliel/NInferEZ-Engine/releases/download/v0.1.0-preview.1/NInferEZ-Engine-0.1.0-preview.1-sm120a-windows-x64.zip"
+    }
+  ]
+}
