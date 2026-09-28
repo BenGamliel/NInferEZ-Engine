@@ -180,11 +180,30 @@ Copy-Item -LiteralPath (Join-Path $RepoRoot 'docs\engine-contract.md') `
 $Serve = Join-Path $ProductRoot 'ninfer-serve.exe'
 $Identity = (& $Serve --version-json | Out-String | ConvertFrom-Json)
 if ($LASTEXITCODE -ne 0) { throw 'ninfer-serve --version-json failed in the package directory.' }
-$GpuNames = switch ($Arch) {
-    '86' { @('NVIDIA GeForce RTX 3090') }
-    '89' { @('NVIDIA GeForce RTX 4090') }
-    '120a' { @('NVIDIA GeForce RTX 5090', 'NVIDIA RTX PRO 6000 Blackwell') }
+$Target = switch ($Arch) {
+    '86' {
+        @{
+            Family = 'NVIDIA Ampere GPUs with compute capability 8.6'
+            Models = @('NVIDIA GeForce RTX 3090', 'NVIDIA GeForce RTX 3090 Ti')
+            NativeNvfp4 = $false
+        }
+    }
+    '89' {
+        @{
+            Family = 'NVIDIA Ada GPUs with compute capability 8.9'
+            Models = @('NVIDIA GeForce RTX 4090')
+            NativeNvfp4 = $false
+        }
+    }
+    '120a' {
+        @{
+            Family = 'NVIDIA Blackwell GPUs with compute capability 12.0a'
+            Models = @('NVIDIA GeForce RTX 5090', 'NVIDIA RTX PRO 6000 Blackwell')
+            NativeNvfp4 = $true
+        }
+    }
 }
+$GpuNames = $Target.Models
 $QualificationLabel = if ($Channel -eq 'stable') { 'hardware-qualified' } else { 'build-verified-preview' }
 $Manifest = [ordered]@{
     schemaVersion = 1
@@ -194,7 +213,11 @@ $Manifest = [ordered]@{
     buildId = $Identity.buildId
     platform = 'windows-x64'
     cudaArchitecture = "sm$Arch"
+    gpuFamily = $Target.Family
     gpuModels = $GpuNames
+    architectureWideCompatibility = $true
+    runtimeCalibrationForUnlistedDevices = $true
+    nativeNvfp4 = [bool]$Target.NativeNvfp4
     channel = $Channel
     qualification = $QualificationLabel
     codeSigned = $false
@@ -272,7 +295,9 @@ $Archive = Get-Item -LiteralPath $ArchivePath
 $ArchiveHash = (Get-FileHash -LiteralPath $ArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
 $ReleaseManifest = [ordered]@{
     schemaVersion = 1; product = 'NInferEZ Engine'; engineVersion = $Version; channel = $Channel
-    cudaArchitecture = "sm$Arch"; gpuModels = $GpuNames; fileName = $Archive.Name
+    cudaArchitecture = "sm$Arch"; gpuFamily = $Target.Family; gpuModels = $GpuNames
+    architectureWideCompatibility = $true; runtimeCalibrationForUnlistedDevices = $true
+    nativeNvfp4 = [bool]$Target.NativeNvfp4; fileName = $Archive.Name
     sizeBytes = $Archive.Length; sha256 = $ArchiveHash; cliIncluded = [bool]$IncludeCli
     codeSigned = $false; url = $null
 }

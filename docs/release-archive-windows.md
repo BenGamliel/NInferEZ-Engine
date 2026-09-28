@@ -9,11 +9,16 @@ It is not affiliated with or endorsed by the upstream maintainers. See `UPSTREAM
 Each archive contains native CUDA code for one GPU family. `engine-manifest.json` records the
 target and release status.
 
-| archive target | intended GPU | release status before hardware qualification |
-| --- | --- | --- |
-| `sm86` | GeForce RTX 3090 / 3090 Ti | Preview |
-| `sm89` | GeForce RTX 4090 | Preview |
-| `sm120a` | GeForce RTX 5090 and compatible Blackwell workstation cards | Preview or Stable as declared in the manifest |
+| archive target | compatible GPU architecture | known profile targets | release status before hardware qualification |
+| --- | --- | --- | --- |
+| `sm86` | NVIDIA compute capability 8.6 | GeForce RTX 3090 / 3090 Ti | Preview |
+| `sm89` | NVIDIA compute capability 8.9 | GeForce RTX 4090 | Preview |
+| `sm120a` | NVIDIA compute capability 12.0a | GeForce RTX 5090 and RTX PRO 6000 Blackwell | Preview or Stable as declared in the manifest |
+
+An unlisted GPU may use the package for its compute capability; the engine calibrates an unknown
+device profile on first use. Model size, context and concurrency still have to fit its available
+VRAM. A marketing series name alone is not a compatibility check, so launchers should select the
+package from the CUDA compute capability reported by the installed device.
 
 Do not use a package built for another architecture. NVFP4 weight artifacts require the `sm120a`
 package. GGUF-block/GSQ-RCO artifacts and the documented groupwise formats use the compatibility

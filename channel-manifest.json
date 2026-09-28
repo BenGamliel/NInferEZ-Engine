@@ -7,17 +7,62 @@
       "engineVersion": "0.1.0-preview.1",
       "contractVersion": 1,
       "platform": "windows-x64",
+      "cudaArchitecture": "sm86",
+      "gpuFamily": "NVIDIA Ampere GPUs with compute capability 8.6",
+      "gpuModels": [
+        "NVIDIA GeForce RTX 3090",
+        "NVIDIA GeForce RTX 3090 Ti"
+      ],
+      "architectureWideCompatibility": true,
+      "runtimeCalibrationForUnlistedDevices": true,
+      "nativeNvfp4": false,
+      "channel": "preview",
+      "qualification": "build-verified-preview",
+      "codeSigned": false,
+      "fileName": "NInferEZ-Engine-0.1.0-preview.1-sm86-windows-x64.zip",
+      "sizeBytes": 1335702326,
+      "sha256": "0c070c048a57a652294e4ec2d2a98590de368b1ebe331870e425ff483afaf7f3",
+      "url": "https://github.com/BenGamliel/NInferEZ-Engine/releases/download/v0.1.0-preview.1/NInferEZ-Engine-0.1.0-preview.1-sm86-windows-x64.zip"
+    },
+    {
+      "engineVersion": "0.1.0-preview.1",
+      "contractVersion": 1,
+      "platform": "windows-x64",
+      "cudaArchitecture": "sm89",
+      "gpuFamily": "NVIDIA Ada GPUs with compute capability 8.9",
+      "gpuModels": [
+        "NVIDIA GeForce RTX 4090"
+      ],
+      "architectureWideCompatibility": true,
+      "runtimeCalibrationForUnlistedDevices": true,
+      "nativeNvfp4": false,
+      "channel": "preview",
+      "qualification": "build-verified-preview",
+      "codeSigned": false,
+      "fileName": "NInferEZ-Engine-0.1.0-preview.1-sm89-windows-x64.zip",
+      "sizeBytes": 1327225574,
+      "sha256": "1c7f0ff4198d5d5987dad3569c6a3aed7c3e0cb08e684e363cae9e823fee7a3d",
+      "url": "https://github.com/BenGamliel/NInferEZ-Engine/releases/download/v0.1.0-preview.1/NInferEZ-Engine-0.1.0-preview.1-sm89-windows-x64.zip"
+    },
+    {
+      "engineVersion": "0.1.0-preview.1",
+      "contractVersion": 1,
+      "platform": "windows-x64",
       "cudaArchitecture": "sm120a",
+      "gpuFamily": "NVIDIA Blackwell GPUs with compute capability 12.0a",
       "gpuModels": [
         "NVIDIA GeForce RTX 5090",
         "NVIDIA RTX PRO 6000 Blackwell"
       ],
+      "architectureWideCompatibility": true,
+      "runtimeCalibrationForUnlistedDevices": true,
+      "nativeNvfp4": true,
       "channel": "preview",
       "qualification": "build-verified-preview",
       "codeSigned": false,
       "fileName": "NInferEZ-Engine-0.1.0-preview.1-sm120a-windows-x64.zip",
-      "sizeBytes": 1112591312,
-      "sha256": "fb13c4431856b9f60c8f9feefd1937ababbb82e9658547404bb55e153eb35236",
+      "sizeBytes": 1112591446,
+      "sha256": "ce1081bbd6ef30828a28e26eec8f4e659c19a21696b17e53bb840fe3377e3306",
       "url": "https://github.com/BenGamliel/NInferEZ-Engine/releases/download/v0.1.0-preview.1/NInferEZ-Engine-0.1.0-preview.1-sm120a-windows-x64.zip"
     }
   ]

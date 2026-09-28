@@ -11,14 +11,28 @@ repeatable Windows build/release matrix, machine-readable engine discovery, mode
 the Windows compatibility changes needed by the local GSQ-RCO conversion. The executable names
 remain `ninfer`, `ninfer-serve` and `ninfer-inspect` so existing NInfer usage stays familiar.
 
-Current Windows package: [NInferEZ Engine 0.1.0 Preview 1 for RTX 5090](https://github.com/BenGamliel/NInferEZ-Engine/releases/tag/v0.1.0-preview.1).
+## Windows downloads
+
+NInferEZ Engine 0.1.0 Preview 1 is published as three native Windows x64 packages. Choose by the
+GPU's CUDA compute capability; NInferEZ applications can make this selection automatically.
+
+| Package | GPU architecture | Known profile targets | Native NVFP4 |
+| --- | --- | --- | --- |
+| [`sm86`](https://github.com/BenGamliel/NInferEZ-Engine/releases/download/v0.1.0-preview.1/NInferEZ-Engine-0.1.0-preview.1-sm86-windows-x64.zip) | NVIDIA compute capability 8.6 | RTX 3090 / 3090 Ti | No |
+| [`sm89`](https://github.com/BenGamliel/NInferEZ-Engine/releases/download/v0.1.0-preview.1/NInferEZ-Engine-0.1.0-preview.1-sm89-windows-x64.zip) | NVIDIA compute capability 8.9 | RTX 4090 | No |
+| [`sm120a`](https://github.com/BenGamliel/NInferEZ-Engine/releases/download/v0.1.0-preview.1/NInferEZ-Engine-0.1.0-preview.1-sm120a-windows-x64.zip) | NVIDIA compute capability 12.0a | RTX 5090 / RTX PRO 6000 Blackwell | Yes |
+
+All packages and their SHA-256 checksums are collected on the
+[v0.1.0-preview.1 release page](https://github.com/BenGamliel/NInferEZ-Engine/releases/tag/v0.1.0-preview.1).
 Launchers can discover compatible published packages through the versioned
 [`channel-manifest.json`](channel-manifest.json); package hashes remain pinned to immutable GitHub
 Release assets.
 
-Release targets are separate native builds: `sm86` for RTX 3090, `sm89` for RTX 4090 and `sm120a`
-for RTX 5090/Blackwell. RTX 3090 and RTX 4090 packages are Preview until this distribution is
-qualified on those physical cards. See [UPSTREAM.md](UPSTREAM.md), [LICENSING.md](LICENSING.md) and
+Release targets are separate native builds: `sm86` for NVIDIA compute capability 8.6, `sm89` for
+8.9 and `sm120a` for 12.0a. The known profiles are tuned for RTX 3090/3090 Ti, RTX 4090, RTX 5090
+and RTX PRO 6000 Blackwell; other cards on the same architecture use runtime calibration and remain
+subject to their available VRAM. RTX 3090 and RTX 4090 packages are Preview until this distribution
+is qualified on those physical cards. See [UPSTREAM.md](UPSTREAM.md), [LICENSING.md](LICENSING.md) and
 the [Windows release guide](docs/release-archive-windows.md). Launchers can integrate through the
 versioned [engine discovery contract](docs/engine-contract.md) without entering the inference path.
 
