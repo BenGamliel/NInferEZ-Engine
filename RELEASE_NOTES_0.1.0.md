@@ -1,5 +1,8 @@
 # NInferEZ Engine 0.1.0 preview line
 
+NInferEZ Engine is published by 2beng2. The 2beng2 mark is secondary publisher branding; NInferEZ
+remains the product identity, and all upstream authorship and licensing notices remain unchanged.
+
 This is the first NInferEZ Engine Windows distribution line, based on
 `iamwavecut/ninfer-all` commit `91576f32ee6147c31d5ead49393cce049530b6e1`.
 
