@@ -1,3 +1,4 @@
+// Modified by NInferEZ Engine in 2026: add stable JSON version and capability discovery.
 #include "ninfer_build_id.h"
 #include "product/logging/engine_diagnostics.h"
 #include "product/logging/logging.h"
@@ -8,6 +9,7 @@
 #include "serve/serve_options.h"
 
 #include <spdlog/logger.h>
+#include <nlohmann/json.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -18,6 +20,7 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -29,6 +32,70 @@
 #endif
 
 namespace {
+
+using Json = nlohmann::ordered_json;
+
+Json engine_identity() {
+    return {{"schemaVersion", 1},
+            {"product", "NInferEZ Engine"},
+            {"engineVersion", NINFEREZ_ENGINE_VERSION},
+            {"contractVersion", NINFEREZ_ENGINE_CONTRACT},
+            {"buildId", NINFER_BUILD_ID},
+            {"platform", "windows-x64"},
+            {"cudaArchitecture", std::string("sm") + NINFEREZ_CUDA_ARCH},
+            {"upstream", "iamwavecut/ninfer-all"},
+            {"unofficialDistribution", true}};
+}
+
+Json engine_capabilities() {
+    Json result = engine_identity();
+    result["artifact"] = {{"format", "ninfer"}, {"containerVersions", Json::array({3})}};
+    result["models"] = Json::array(
+        {"Qwen3.8-27B", "Qwen3.6-27B", "Qwen3.6-35B-A3B", "Ternary-Bonsai-2-27B"});
+    result["kvFormats"] = Json::array(
+        {"bf16", "int8", "fp8", "rk8v4", "rk4v4", "rk4v4-e8", "rk2v4-e8", "nvfp4", "k8v4"});
+    result["speculation"] = {{"backends", Json::array({"none", "mtp", "dflash", "dflash2"})},
+                             {"draftTokens", {{"minimum", 1}, {"maximum", 15}}},
+                             {"modelComponentsRequired", true}};
+    result["serving"] =
+        {{"openAIChatCompletions", true},
+         {"openAIResponses", true},
+         {"anthropicMessages", true},
+         {"health", "/health"},
+         {"load", "/v1/load"},
+         {"metrics", "/metrics"},
+         {"stats", "/stats"}};
+    result["features"] = {{"vision", true},
+                           {"structuredOutput", true},
+                           {"multiGpuPipeline", true},
+                           {"prefixCache", true},
+                           {"ggufBlockArtifacts", true},
+#ifdef NINFER_SM120_NVFP4
+                           {"nativeNvfp4Weights", true},
+                           {"nativeFp8Weights", true}};
+#else
+                           {"nativeNvfp4Weights", false},
+                           {"nativeFp8Weights", false}};
+#endif
+    result["commands"] = {{"version", "ninfer-serve --version-json"},
+                           {"capabilities", "ninfer-serve --capabilities-json"},
+                           {"inspect", "ninfer-inspect --model <path> --json"}};
+    return result;
+}
+
+std::optional<int> handle_contract_command(int argc, char** argv) {
+    if (argc != 2) { return std::nullopt; }
+    const std::string_view command(argv[1]);
+    if (command == "--version-json") {
+        std::cout << engine_identity().dump(2) << '\n';
+        return 0;
+    }
+    if (command == "--capabilities-json") {
+        std::cout << engine_capabilities().dump(2) << '\n';
+        return 0;
+    }
+    return std::nullopt;
+}
 
 std::atomic<ninfer::serve::HttpServer*> g_server{nullptr};
 
@@ -115,6 +182,7 @@ std::string binary_identity(const char* argv0) {
 
 int main(int argc, char** argv) {
     std::set_terminate(log_terminate);
+    if (const auto result = handle_contract_command(argc, argv)) { return *result; }
     ninfer::serve::ServeOptions options;
     try {
         options = ninfer::serve::parse_serve_options(argc, argv);

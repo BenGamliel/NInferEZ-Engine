@@ -1,0 +1,26 @@
+NInferEZ Engine third-party notices
+===================================
+
+NInferEZ Engine is an unofficial derivative of NInfer and iamwavecut/ninfer-all. The derived engine
+code is distributed under Apache License 2.0. The complete Apache license, upstream contributor
+records and the exact source provenance are included with every release.
+
+The source tree and Windows binary distribution contain or link the following third-party work:
+
+- cpp-httplib — MIT License
+- ggml quantization code — MIT License
+- llama-jinja — MIT License; Unicode data terms are included separately
+- nlohmann/json — MIT License
+- spdlog and bundled fmt — MIT License
+- utf8proc — MIT-style license with retained historical notices
+- XGrammar — Apache License 2.0 with retained NOTICE
+- DLPack material vendored by XGrammar — Apache License 2.0
+- curl/libcurl, FFmpeg and zlib from the Windows dependency build — their license/copyright files
+  are retained by the dependency build and must be included in a public binary after payload audit
+- NVIDIA CUDA/cuBLAS redistributables — NVIDIA CUDA Toolkit EULA, not Apache-2.0
+- Microsoft Visual C++ runtime — permitted x64 Redistributable files are deployed app-local in the
+  Windows package under the Microsoft Software License Terms
+
+The `licenses/` directory in a binary package contains the complete texts copied from the exact
+source/runtime payload. No model weights are included. Model weights and converted artifacts have
+their own licenses and are not covered by the engine license.

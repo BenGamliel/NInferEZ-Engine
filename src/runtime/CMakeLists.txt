@@ -1,8 +1,27 @@
+# Modified by NInferEZ Engine in 2026 to keep generated literals within MSVC limits.
 # The measured device route profiles ship inside the binary: device_profiles.json (ninfer-calibrate
 # --print output of each part, merged) becomes a string in the generated source.
 set(NINFER_DEVICE_PROFILES_FILE ${CMAKE_CURRENT_SOURCE_DIR}/engine/device_profiles.json)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${NINFER_DEVICE_PROFILES_FILE})
 file(READ ${NINFER_DEVICE_PROFILES_FILE} NINFER_DEVICE_PROFILES_JSON)
+# MSVC rejects a single raw string literal of this size (C2026). Build the
+# identical JSON from bounded literals once at runtime instead.
+string(LENGTH "${NINFER_DEVICE_PROFILES_JSON}" NINFER_DEVICE_PROFILES_LENGTH)
+set(NINFER_DEVICE_PROFILES_APPENDS "")
+set(_profiles_offset 0)
+while(_profiles_offset LESS NINFER_DEVICE_PROFILES_LENGTH)
+  math(EXPR _profiles_remaining "${NINFER_DEVICE_PROFILES_LENGTH} - ${_profiles_offset}")
+  if(_profiles_remaining GREATER 4096)
+    set(_profiles_chunk_length 4096)
+  else()
+    set(_profiles_chunk_length ${_profiles_remaining})
+  endif()
+  string(SUBSTRING "${NINFER_DEVICE_PROFILES_JSON}" ${_profiles_offset}
+         ${_profiles_chunk_length} _profiles_chunk)
+  string(APPEND NINFER_DEVICE_PROFILES_APPENDS
+         "        value.append(R\"ninfer_json(${_profiles_chunk})ninfer_json\");\n")
+  math(EXPR _profiles_offset "${_profiles_offset} + ${_profiles_chunk_length}")
+endwhile()
 configure_file(engine/device_profiles_builtin.cpp.in
                ${CMAKE_CURRENT_BINARY_DIR}/engine/device_profiles_builtin.cpp @ONLY)
 

@@ -1,10 +1,18 @@
+// Modified by NInferEZ Engine in 2026 to assemble the generated profile JSON in bounded chunks.
 #include "runtime/engine/device_profiles_builtin.h"
+
+#include <string>
 
 namespace ninfer::runtime {
 
 // Generated from src/runtime/engine/device_profiles.json at configure time.
 std::string_view compiled_device_route_profiles_json() {
-    return R"ninfer_json(@NINFER_DEVICE_PROFILES_JSON@)ninfer_json";
+    static const std::string json = [] {
+        std::string value;
+        value.reserve(@NINFER_DEVICE_PROFILES_LENGTH@);
+@NINFER_DEVICE_PROFILES_APPENDS@        return value;
+    }();
+    return json;
 }
 
 } // namespace ninfer::runtime

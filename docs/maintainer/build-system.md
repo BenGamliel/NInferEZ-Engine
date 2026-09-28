@@ -1,10 +1,18 @@
 # Build system
 
+> Modified by NInferEZ Engine in 2026 to document the Windows multi-target release matrix.
+
 NInfer builds from its source tree with CMake 3.28+ and C++/CUDA 20.
-The supported architecture is `sm_120a`; CUDA 13.1 is the validated development toolkit.
+NInferEZ Engine produces separate native Windows builds for `sm_86` (RTX 3090), `sm_89`
+(RTX 4090) and `sm_120a` (RTX 5090/Blackwell). CUDA 13.1 is the currently validated local
+toolkit; the build system enforces CUDA 12.8 or newer.
 Product commands and prerequisites are in the
 [README](../../README.md#quick-start); test and measurement workflows live in
 [tests](../../tests/README.md) and [benchmarks](../../bench/README.md).
+
+On Windows, use `scripts/build.ps1 -Arch 86|89|120a`. Each architecture receives its own
+`build-sm<arch>` directory. The script accepts an in-repository dependency cache created by
+`scripts/bootstrap-dependencies.ps1`; no dependency is downloaded while running a packaged engine.
 
 ## Configuration
 

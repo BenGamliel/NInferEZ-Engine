@@ -1,3 +1,4 @@
+# Modified by NInferEZ Engine in 2026: expose a stable machine-readable engine contract.
 # The build id is stamped at BUILD time (see cmake/GenerateBuildId.cmake) into a generated header,
 # so it reflects the tree actually being compiled rather than the last configure. Every product
 # binary records it in its startup log ("build <id>"). The header is only rewritten when its
@@ -33,9 +34,24 @@ ninfer_stage_runtime_dlls(ninfer)
 
 add_executable(ninfer-serve serve/main.cpp)
 ninfer_internal_includes(ninfer-serve)
-target_link_libraries(ninfer-serve PRIVATE ninfer_serve ninfer_product_logging)
+file(STRINGS "${CMAKE_SOURCE_DIR}/VERSION" NINFEREZ_ENGINE_VERSION LIMIT_COUNT 1)
+string(STRIP "${NINFEREZ_ENGINE_VERSION}" NINFEREZ_ENGINE_VERSION)
+target_compile_definitions(ninfer-serve PRIVATE
+  NINFEREZ_ENGINE_VERSION="${NINFEREZ_ENGINE_VERSION}"
+  NINFEREZ_ENGINE_CONTRACT=1
+  NINFEREZ_CUDA_ARCH="${CMAKE_CUDA_ARCHITECTURES}")
+target_link_libraries(ninfer-serve PRIVATE ninfer_serve ninfer_product_logging ninfer::json)
 ninfer_stamp_build_id(ninfer-serve)
 ninfer_stage_runtime_dlls(ninfer-serve)
+
+add_executable(ninfer-inspect inspect/main.cpp)
+ninfer_internal_includes(ninfer-inspect)
+target_compile_definitions(ninfer-inspect PRIVATE
+  NINFEREZ_ENGINE_VERSION="${NINFEREZ_ENGINE_VERSION}"
+  NINFEREZ_ENGINE_CONTRACT=1
+  NINFEREZ_CUDA_ARCH="${CMAKE_CUDA_ARCHITECTURES}")
+target_link_libraries(ninfer-inspect PRIVATE ninfer_artifact ninfer::json)
+ninfer_stamp_build_id(ninfer-inspect)
 
 add_executable(ninfer-calibrate calibrate/main.cpp)
 ninfer_internal_includes(ninfer-calibrate)

@@ -1,3 +1,4 @@
+// Modified by NInferEZ Engine in 2026 to stay within MSVC parser nesting limits.
 #include "serve/serve_options.h"
 #include "product/post_thinking_options.h"
 #include "product/rope_yarn_options.h"
@@ -79,6 +80,7 @@ KvCapacityPolicy parse_kv_capacity(const char* text) {
 std::string serve_usage_text(const char* argv0) {
     return std::string("usage: ") + argv0 +
            " <model.ninfer> [options]\n"
+           "       " + argv0 + " --version-json | --capabilities-json\n"
            "\n"
            "Serves the OpenAI Responses/Chat Completions and Anthropic Messages APIs.\n"
            "  --help, -h                    show this help and exit\n"
@@ -489,6 +491,9 @@ ServeOptions parse_serve_options(int argc, char** argv) {
             if (++i >= argc) { throw std::invalid_argument(std::string(flag) + " needs a value"); }
             return argv[i];
         };
+        // Keep the two option groups independent: one giant else-if tree exceeds
+        // MSVC's nested-block limit (C1061) in this otherwise ordinary parser.
+        bool handled_in_first_group = true;
         if (arg == "--host") {
             options.host = require_value("--host");
         } else if (arg == "--port") {
@@ -733,7 +738,11 @@ ServeOptions parse_serve_options(int argc, char** argv) {
                 parse_nonnegative_int(require_value("--max-cache-markers-per-request"),
                                       "max-cache-markers-per-request"));
             context_capacity_explicit = true;
-        } else if (arg == "--request-log-jsonl") {
+        } else {
+            handled_in_first_group = false;
+        }
+        if (handled_in_first_group) { continue; }
+        if (arg == "--request-log-jsonl") {
             options.request_log_jsonl = require_value("--request-log-jsonl");
             if (options.request_log_jsonl.empty()) {
                 throw std::invalid_argument("--request-log-jsonl must not be empty");

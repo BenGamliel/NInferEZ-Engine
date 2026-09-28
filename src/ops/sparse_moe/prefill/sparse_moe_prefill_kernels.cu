@@ -1,3 +1,4 @@
+// Modified by NInferEZ Engine in 2026 for portable C++20/MSVC bit operations.
 #include "core/weight.h"
 #include "ops/sparse_moe/prefill/sparse_moe_prefill.h"
 
@@ -22,6 +23,7 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <bit>
 #include <cstdint>
 #include <stdexcept>
 
@@ -1403,7 +1405,9 @@ struct Nvfp4SourceDivisorEpilogue {
 Nvfp4SourceDivisorEpilogue nvfp4_divisor_epilogue(const Weight& weight) {
     const int rows = weight.weight_divisor_rows;
     if (rows == weight.n) { return {nullptr, 1.0F / weight.weight_scale_divisor, rows, -1}; }
-    const int shift = (rows > 0 && (rows & (rows - 1)) == 0) ? __builtin_ctz(rows) : -1;
+    const int shift = (rows > 0 && (rows & (rows - 1)) == 0)
+                          ? static_cast<int>(std::countr_zero(static_cast<unsigned>(rows)))
+                          : -1;
     return {static_cast<const float*>(weight.weight_divisors), 0.0F, rows, shift};
 }
 

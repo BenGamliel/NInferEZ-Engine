@@ -1,51 +1,29 @@
-# Build NInfer-3090 on Windows with the toolchain this project actually needs.
-#
-# Three things are not the defaults on a typical machine, and getting any of them wrong produces
-# an error that does not name the real cause:
-#
-#   MSVC 14.4x from VS 2022 BuildTools. VS 2026 ships MSVC 14.50 (_MSC_VER 1950), which CUDA
-#   12.8's host_config.h rejects outright - it accepts 1910-1949. If a VS 2026 cl.exe wins on
-#   PATH you get a wall of host_config errors that say nothing about the compiler version.
-#
-#   CUDA 12.8, forced through CUDACXX. If an older toolkit is also installed it is picked up from
-#   PATH instead and the configure step fails the CMakeLists version guard.
-#
-#   The Ninja generator. MSBuild's CUDA integration needs CUDA_PATH_V12_8, which the CUDA
-#   installer does not always set; without it CudaToolkitDir resolves empty and every .cu fails.
-#
-# Running this from a plain PowerShell prompt is fine: it imports the BuildTools environment
-# itself rather than requiring a Developer Prompt.
-#
-#   .\scripts\build.ps1                  configure + build into build-ninja
-#   .\scripts\build.ps1 -Test            ... then run the test suite
-#   .\scripts\build.ps1 -Package         ... then build the release archive for VERSION
-#   .\scripts\build.ps1 -Benchmarks      ... include bench\ (implied by -Package)
-#   .\scripts\build.ps1 -Clean           delete the build directory first
-#   .\scripts\build.ps1 -Target ninfer-serve
+# Modified by NInferEZ Engine in 2026: one reproducible Windows build entry point for every target.
 [CmdletBinding()]
 param(
+    [ValidateSet('86', '89', '120a')][string]$Arch = '120a',
     [switch]$Test,
     [switch]$Package,
     [switch]$Clean,
     [switch]$Benchmarks,
-    [string]$Target,
+    [string[]]$Target,
     [string]$BuildDir,
-    [ValidateSet('80', '86', '89')][string]$Arch = '86'
+    [string]$DependencyRoot,
+    [string]$CudaRoot,
+    [ValidateRange(1, 64)][int]$Jobs = 8
 )
 
 $ErrorActionPreference = 'Stop'
+$RepoRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
+if (-not $BuildDir) { $BuildDir = Join-Path $RepoRoot "build-sm$Arch" }
+$BuildDir = [IO.Path]::GetFullPath($BuildDir)
 
-$RepoRoot = Split-Path -Parent $PSScriptRoot
-if (-not $BuildDir) { $BuildDir = Join-Path $RepoRoot 'build-ninja' }
-
-# The packager ships bench\ninfer_bench.exe alongside the CLI and the server, but
-# benchmarks are an opt-in subdirectory (NINFER_BUILD_BENCHMARKS defaults to OFF). Configuring
-# without them and then packaging fails late, after the whole tree has been built, with
-# "Missing release product: ...\bench\ninfer_bench.exe" - so make -Package imply the option rather
-# than leaving the two settings to be kept consistent by hand.
-$BuildBenchmarks = $Benchmarks -or $Package
-
-# --- locate the toolchain ---------------------------------------------------------------------
+# Clean is intentionally limited to a named build directory inside this repository.
+$repoPrefix = $RepoRoot.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+if (-not $BuildDir.StartsWith($repoPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+    -not (Split-Path -Leaf $BuildDir).StartsWith('build-', [StringComparison]::OrdinalIgnoreCase)) {
+    throw "BuildDir must be a build-* directory inside the repository: $BuildDir"
+}
 
 $VcVarsCandidates = @(
     'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat',
@@ -55,85 +33,111 @@ $VcVarsCandidates = @(
     'C:\Program Files (x86)\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat'
 )
 $VcVars = $VcVarsCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
-if (-not $VcVars) {
-    throw @"
-No Visual Studio 2022 x64 build environment found. Looked in:
-$($VcVarsCandidates -join "`n")
-Install "Desktop development with C++" from VS 2022 Build Tools. VS 2026 will not work: its
-MSVC 14.50 is rejected by CUDA 12.8.
-"@
+if (-not $VcVars) { throw 'Visual Studio 2022 with Desktop development for C++ is required.' }
+
+if (-not $CudaRoot) {
+    $CudaCandidates = @($env:NINFEREZ_CUDA_ROOT,
+        'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.1',
+        'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9',
+        'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8',
+        $env:CUDA_PATH) |
+        Where-Object { $_ -and (Test-Path -LiteralPath (Join-Path $_ 'bin\nvcc.exe')) }
+    $CudaRoot = $CudaCandidates | Select-Object -First 1
 }
-
-$CudaCandidates = @(
-    'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8\bin\nvcc.exe',
-    'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9\bin\nvcc.exe'
-)
-$Nvcc = $CudaCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
-if (-not $Nvcc) {
-    throw @"
-No CUDA 12.8+ toolkit found. Looked in:
-$($CudaCandidates -join "`n")
-CMakeLists requires CUDA >= 12.8. Set CUDACXX yourself if your toolkit lives elsewhere.
-"@
+if (-not $CudaRoot -or -not (Test-Path -LiteralPath (Join-Path $CudaRoot 'bin\nvcc.exe'))) {
+    throw 'CUDA 12.8 or newer is required. Pass -CudaRoot or set NINFEREZ_CUDA_ROOT.'
 }
+$CudaRoot = [IO.Path]::GetFullPath($CudaRoot)
 
-# vcvars64.bat only exports into its own cmd process, so run it and copy the result back.
-Write-Host "toolchain: $VcVars"
-Write-Host "toolchain: $Nvcc"
-cmd /c "`"$VcVars`" >nul 2>&1 && set" | ForEach-Object {
-    if ($_ -match '^([^=]+)=(.*)$') { Set-Item -Path "Env:$($Matches[1])" -Value $Matches[2] }
+if (-not $DependencyRoot) {
+    $DependencyCandidates = @($env:NINFEREZ_DEPENDENCY_ROOT,
+        (Join-Path $RepoRoot '.deps\vcpkg-deps\installed\x64-windows'),
+        (Join-Path $RepoRoot 'vcpkg_installed\x64-windows')) |
+        Where-Object { $_ -and (Test-Path -LiteralPath $_) }
+    $DependencyRoot = $DependencyCandidates | Select-Object -First 1
 }
-$env:CUDACXX = $Nvcc
+if (-not $DependencyRoot -or -not (Test-Path -LiteralPath $DependencyRoot)) {
+    throw 'Windows dependencies are missing. Run scripts\bootstrap-dependencies.ps1 or pass -DependencyRoot.'
+}
+$DependencyRoot = [IO.Path]::GetFullPath($DependencyRoot)
 
-$cl = (Get-Command cl.exe -ErrorAction SilentlyContinue)
-if ($cl) { Write-Host "toolchain: $($cl.Source)" }
+$NinjaCandidates = @(
+    (Get-Command ninja.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -First 1),
+    'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe',
+    'C:\Program Files\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe'
+) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
+$Ninja = $NinjaCandidates | Select-Object -First 1
+if (-not $Ninja) { throw 'Ninja is required and was not found.' }
 
-# --- configure and build ----------------------------------------------------------------------
+$VcPath = $null
+$VcEnvironment = cmd /c "`"$VcVars`" >nul 2>&1 && set"
+$VcEnvironment | ForEach-Object {
+    if ($_ -match '^([^=]+)=(.*)$') {
+        $Name = $Matches[1]
+        $Value = $Matches[2]
+        # The sandbox can expose both Path and PATH. vcvars writes the complete toolchain value as
+        # PATH; importing the stale mixed-case copy afterwards would hide rc.exe and cl.exe again.
+        if ($Name -ceq 'PATH') { $VcPath = $Value }
+        elseif ($Name -ine 'PATH') { Set-Item -Path "Env:$Name" -Value $Value }
+    }
+}
+if (-not $VcPath) { throw 'vcvars did not return a PATH value.' }
+$env:Path = $VcPath
+$CompilerBin = Join-Path $env:VCToolsInstallDir 'bin\Hostx64\x64'
+if (-not (Test-Path -LiteralPath (Join-Path $CompilerBin 'cl.exe'))) {
+    throw "vcvars did not expose a usable x64 compiler: $CompilerBin"
+}
+$env:Path = "$CompilerBin;$($env:Path)"
+$env:CUDA_PATH = $CudaRoot
+$env:CUDACXX = Join-Path $CudaRoot 'bin\nvcc.exe'
+$env:VCPKG_ROOT = Split-Path -Parent (Split-Path -Parent $DependencyRoot)
+$env:VCPKG_TARGET_TRIPLET = 'x64-windows'
 
 if ($Clean -and (Test-Path -LiteralPath $BuildDir)) {
-    Write-Host "removing $BuildDir"
+    Write-Host "Removing $BuildDir"
     Remove-Item -LiteralPath $BuildDir -Recurse -Force
 }
 
-Push-Location $RepoRoot
-try {
-    # Quote the -D arguments: PowerShell does not reliably expand a variable inside a bare token
-    # that begins with "-D", and cmake then sees the literal "$Arch".
-    $BenchmarksOption = if ($BuildBenchmarks) { 'ON' } else { 'OFF' }
-    cmake -S . -B $BuildDir -G Ninja '-DCMAKE_BUILD_TYPE=Release' "-DCMAKE_CUDA_ARCHITECTURES=$Arch" `
-          "-DNINFER_BUILD_BENCHMARKS=$BenchmarksOption"
-    if ($LASTEXITCODE -ne 0) { throw "configure failed ($LASTEXITCODE)" }
+$TestingOption = if ($Test) { 'ON' } else { 'OFF' }
+$BenchmarksOption = if ($Benchmarks) { 'ON' } else { 'OFF' }
+$configure = @(
+    '-S', $RepoRoot, '-B', $BuildDir, '-G', 'Ninja',
+    "-DCMAKE_MAKE_PROGRAM=$Ninja",
+    '-DCMAKE_BUILD_TYPE=Release',
+    "-DCMAKE_CUDA_ARCHITECTURES=$Arch",
+    "-DCMAKE_CUDA_COMPILER=$env:CUDACXX",
+    "-DCMAKE_PREFIX_PATH=$DependencyRoot",
+    '-DVCPKG_TARGET_TRIPLET=x64-windows',
+    '-DNINFER_BUILD_APPS=ON',
+    "-DNINFER_BUILD_BENCHMARKS=$BenchmarksOption",
+    "-DBUILD_TESTING=$TestingOption"
+)
 
-    $buildArgs = @('--build', $BuildDir)
-    if ($Target) { $buildArgs += @('--target', $Target) }
-    cmake @buildArgs
-    if ($LASTEXITCODE -ne 0) { throw "build failed ($LASTEXITCODE)" }
+Write-Host "NInferEZ Engine target: sm$Arch"
+Write-Host "CUDA: $CudaRoot"
+Write-Host "Dependencies: $DependencyRoot"
+& cmake @configure
+if ($LASTEXITCODE -ne 0) { throw "Configure failed ($LASTEXITCODE)." }
 
-    if ($Test) {
-        # One GPU, so keep the parallelism low: unrelated CUDA tests contend for memory and
-        # produce failures that do not reproduce when the test is run on its own.
-        ctest --test-dir $BuildDir -j2 --output-on-failure
-        if ($LASTEXITCODE -ne 0) { throw "tests failed ($LASTEXITCODE)" }
-    }
+$build = @('--build', $BuildDir, '--parallel', $Jobs)
+if ($Target) { $build += @('--target') + $Target }
+& cmake @build
+if ($LASTEXITCODE -ne 0) { throw "Build failed ($LASTEXITCODE)." }
 
-    if ($Package) {
-        $packager = Join-Path $PSScriptRoot 'package-release.ps1'
-        # The packager defaults to build-ninja\; point it at the tree we actually built, so
-        # -BuildDir and -Package agree. build.sh already does this for the Linux packager.
-        $PreviousBuildRoot = $env:NINFER_BUILD_ROOT
-        $env:NINFER_BUILD_ROOT = $BuildDir
-        try {
-            & $packager
-            if ($LASTEXITCODE -ne 0) { throw "packaging failed ($LASTEXITCODE)" }
-        } finally {
-            $env:NINFER_BUILD_ROOT = $PreviousBuildRoot
-        }
-    }
-} finally {
-    Pop-Location
+$ServeProduct = Join-Path $BuildDir 'apps\ninfer-serve.exe'
+$InspectProduct = Join-Path $BuildDir 'apps\ninfer-inspect.exe'
+if ((Test-Path -LiteralPath $ServeProduct) -and (Test-Path -LiteralPath $InspectProduct)) {
+    & (Join-Path $PSScriptRoot 'test-contract.ps1') -BuildRoot $BuildDir -ExpectedArch $Arch
 }
 
-Write-Host ''
-Write-Host "built into $BuildDir"
-Write-Host "  server : $(Join-Path $BuildDir 'apps\ninfer-serve.exe')"
-Write-Host "  cli    : $(Join-Path $BuildDir 'apps\ninfer.exe')"
+if ($Test) {
+    & ctest --test-dir $BuildDir -j2 --output-on-failure
+    if ($LASTEXITCODE -ne 0) { throw "Tests failed ($LASTEXITCODE)." }
+}
+
+if ($Package) {
+    & (Join-Path $PSScriptRoot 'package-release.ps1') -Arch $Arch -BuildRoot $BuildDir
+    if ($LASTEXITCODE -ne 0) { throw "Packaging failed ($LASTEXITCODE)." }
+}
+
+Write-Host "Built NInferEZ Engine sm$Arch in $BuildDir"

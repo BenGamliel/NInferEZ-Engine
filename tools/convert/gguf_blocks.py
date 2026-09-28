@@ -1,3 +1,4 @@
+# Modified by NInferEZ Engine in 2026 to accept F32 GDN alpha projections from third-party GGUFs.
 """A Qwen3.5/3.8 dense GGUF kept in its own ggml block formats (GSQ-RCO mixed-precision releases).
 
 Every text projection, the token table, the output head and the MTP head of an ``-mtp`` build are
@@ -157,8 +158,12 @@ def validate(gguf: GGUFFile) -> None:
     for name, (shape, kind) in expected.items():
         info = gguf.tensors[name]
         stored = info.type_id in GGUF_FORMATS_BY_TYPE
+        # Some third-party exports retain the GDN alpha projections in F32.
+        # NInfer stores these small direct projections in BF16; the quantized
+        # GGUF block matrices are unaffected by this exception.
+        alpha_f32 = name.endswith(".ssm_alpha.weight") and info.type_name == "F32"
         if info.shape != shape or (kind == "blocks") != stored or (
-            kind != "blocks" and info.type_name != kind
+            kind != "blocks" and info.type_name != kind and not alpha_f32
         ):
             raise ValueError(f"{gguf.path}: {name} is {info.type_name} {info.shape}")
     end = max(info.offset + info.nbytes for info in gguf.tensors.values())
@@ -297,13 +302,20 @@ def text_sources(
             gguf, g + "ssm_out.weight", (HIDDEN, GDN_VALUE_DIM), rows()
         )
         for role, tensor in (("a_projection", "ssm_alpha.weight"), ("b_projection", "ssm_beta.weight")):
-            words = untile(gguf.read_bf16_words(g + tensor), 1)
-            direct[n + role] = array_source(
-                torch.from_numpy(np.ascontiguousarray(words.view(np.int16))).view(
-                    torch.bfloat16
-                ),
-                g + tensor,
-            )
+            if gguf.info(g + tensor).type_name == "F32":
+                direct[n + role] = _direct(
+                    untile(gguf.read_direct(g + tensor), 1),
+                    torch.bfloat16,
+                    g + tensor,
+                )
+            else:
+                words = untile(gguf.read_bf16_words(g + tensor), 1)
+                direct[n + role] = array_source(
+                    torch.from_numpy(np.ascontiguousarray(words.view(np.int16))).view(
+                        torch.bfloat16
+                    ),
+                    g + tensor,
+                )
         ssm_a = untile(gguf.read_direct(g + "ssm_a"), 1).astype(np.float64)
         if not np.all(ssm_a < 0):
             raise ValueError(f"{g}ssm_a must be strictly negative (-exp(A_log))")

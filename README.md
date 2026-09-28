@@ -1,4 +1,23 @@
-# NInfer-all
+# NInferEZ Engine
+
+> NInferEZ Engine is an unofficial Windows distribution and derivative of
+> [iamwavecut/ninfer-all](https://github.com/iamwavecut/ninfer-all), which is derived from NInfer
+> and credited community forks. The engine code is distributed under the Apache License 2.0.
+> Upstream authorship and third-party notices are retained in this repository and in binary
+> release packages. This project is not affiliated with or endorsed by the upstream maintainers.
+
+NInferEZ Engine keeps the inference path and performance work of NInfer-all intact while adding a
+repeatable Windows build/release matrix, machine-readable engine discovery, model inspection and
+the Windows compatibility changes needed by the local GSQ-RCO conversion. The executable names
+remain `ninfer`, `ninfer-serve` and `ninfer-inspect` so existing NInfer usage stays familiar.
+
+Release targets are separate native builds: `sm86` for RTX 3090, `sm89` for RTX 4090 and `sm120a`
+for RTX 5090/Blackwell. RTX 3090 and RTX 4090 packages are Preview until this distribution is
+qualified on those physical cards. See [UPSTREAM.md](UPSTREAM.md), [LICENSING.md](LICENSING.md) and
+the [Windows release guide](docs/release-archive-windows.md). Launchers can integrate through the
+versioned [engine discovery contract](docs/engine-contract.md) without entering the inference path.
+
+## Upstream project description
 
 One line of [NInfer](https://github.com/Neroued/ninfer) for the RTX 3090, RTX 4090, RTX 5090 and RTX
 PRO 6000 Blackwell, consolidated from the forks that carry it and extended with this repository's
@@ -406,6 +425,22 @@ Weight conversion shows how the [Bonsai](docs/weight-conversion.md#ternary-bonsa
 
 ## Building
 
+### Windows
+
+Use the repository-local build entry point; it keeps downloaded dependencies and every build
+directory inside this checkout:
+
+```powershell
+.\scripts\bootstrap-dependencies.ps1
+.\scripts\build.ps1 -Arch 86   -Target ninfer,ninfer-serve,ninfer-inspect
+.\scripts\build.ps1 -Arch 89   -Target ninfer,ninfer-serve,ninfer-inspect
+.\scripts\build.ps1 -Arch 120a -Target ninfer,ninfer-serve,ninfer-inspect
+```
+
+The targets correspond to RTX 3090, RTX 4090 and RTX 5090/compatible Blackwell respectively.
+They are deliberately separate binaries rather than one oversized multi-architecture executable.
+See the [release guide](docs/release-archive-windows.md) for packaging and compatibility checks.
+
 <details>
 <summary>Linux with CUDA 13.1</summary>
 
@@ -418,11 +453,11 @@ cmake --build build --target ninfer-serve ninfer-calibrate
 for the RTX 50 series and the RTX PRO 6000 Blackwell (on the `mma.sync` compatibility path, which the
 ternary route needs). The
 opt-in build options are listed in the [Linux build guide](docs/rtx-3090-linux.md#build-options).
-Windows builds, release packages, tests and benchmarks work as in the
-[NInfer-3090 README](https://github.com/ashalliants/ninfer-3090#readme).
 </details>
 
 ## License
 
-Apache-2.0, as upstream. The Bonsai artifact's weights come from PrismML, ProCreations and Qwen,
-all Apache-2.0; its card lists the notices.
+Engine source is Apache-2.0, as upstream. See [LICENSING.md](LICENSING.md),
+[THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt), [UPSTREAM.md](UPSTREAM.md) and the retained
+[contributors](CONTRIBUTORS.md). Model artifacts are distributed separately and remain subject to
+their own licenses and terms; the engine license does not grant model-weight rights.

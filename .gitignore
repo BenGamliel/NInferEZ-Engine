@@ -9,6 +9,8 @@ cmake-build-*/
 compile_commands.json
 CMakeUserPresets.json
 .cache/
+# NInferEZ Engine local dependency cache; release archives contain only the runtime closure.
+.deps/
 
 # CUDA / profiling artifacts
 *.nsys-rep
