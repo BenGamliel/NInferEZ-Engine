@@ -1,6 +1,6 @@
 # NInferEZ Engine
 
-<p align="right"><sub>BY</sub> <img src="assets/2beng2.png" alt="2beng2" height="22"></p>
+<p align="right"><sub>By</sub> <img src="assets/2beng2.png" alt="2beng2" height="22"></p>
 
 > NInferEZ Engine is an unofficial Windows distribution and derivative of
 > [iamwavecut/ninfer-all](https://github.com/iamwavecut/ninfer-all), which is derived from NInfer
