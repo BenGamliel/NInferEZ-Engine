@@ -24,3 +24,7 @@ The source tree and Windows binary distribution contain or link the following th
 The `licenses/` directory in a binary package contains the complete texts copied from the exact
 source/runtime payload. No model weights are included. Model weights and converted artifacts have
 their own licenses and are not covered by the engine license.
+
+FFmpeg corresponding source (8.1.2, LGPL 2.1 or later):
+https://github.com/BenGamliel/NInferEZ-Engine/releases/download/v1.0.0/FFmpeg-8.1.2-Corresponding-Source.zip
+See docs/FFMPEG-SOURCE.md for source identity, patches and build instructions.
