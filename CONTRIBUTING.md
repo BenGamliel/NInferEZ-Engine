@@ -116,7 +116,7 @@ Run the focused checks needed to establish the changed behavior and its material
 exact commands and summarize the results. If a relevant check could not be run, state that
 limitation and its consequence. Do not claim validation that was not performed.
 
-## Contributor responsibility and AI assistance
+## Contributor responsibility
 
 The contributor is responsible for every submitted change, regardless of which tools were used to
 produce it. Tool choice neither qualifies nor disqualifies a contribution.

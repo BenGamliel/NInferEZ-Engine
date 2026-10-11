@@ -68,6 +68,15 @@ target_link_libraries(ninfer-perplexity PRIVATE
 ninfer_stamp_build_id(ninfer-perplexity)
 ninfer_stage_runtime_dlls(ninfer-perplexity)
 
+if(WIN32)
+  enable_language(RC)
+  configure_file(windows/engine-icon.rc.in
+    "${CMAKE_BINARY_DIR}/generated/ninferez-engine-icon.rc" @ONLY)
+  foreach(app IN ITEMS ninfer ninfer-serve ninfer-inspect ninfer-calibrate ninfer-perplexity)
+    target_sources(${app} PRIVATE "${CMAKE_BINARY_DIR}/generated/ninferez-engine-icon.rc")
+  endforeach()
+endif()
+
 if(WIN32 AND NINFER_DIRECTSTORAGE)
   foreach(app IN ITEMS ninfer ninfer-serve)
     add_custom_command(TARGET ${app} POST_BUILD

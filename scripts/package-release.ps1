@@ -169,7 +169,7 @@ foreach ($License in $DependencyLicenses) {
     Copy-Item -LiteralPath $Source -Destination (Join-Path $LicenseRoot $License[1])
 }
 foreach ($Name in @('VERSION', 'UPSTREAM.md', 'CONTRIBUTORS.md', 'LICENSING.md',
-                     'THIRD-PARTY-NOTICES.txt', 'RELEASE_NOTES_0.1.0.md')) {
+                     'THIRD-PARTY-NOTICES.txt', 'RELEASE_NOTES_1.0.0.md')) {
     Copy-Item -LiteralPath (Join-Path $RepoRoot $Name) -Destination $ProductRoot
 }
 Copy-Item -LiteralPath (Join-Path $RepoRoot 'docs\release-archive-windows.md') `
@@ -178,6 +178,15 @@ Copy-Item -LiteralPath (Join-Path $RepoRoot 'docs\engine-contract.md') `
     -Destination (Join-Path $ProductRoot 'ENGINE-CONTRACT.md')
 
 $Serve = Join-Path $ProductRoot 'ninfer-serve.exe'
+$AssetRoot = Join-Path $ProductRoot 'Assets'
+New-Item -ItemType Directory -Path $AssetRoot -Force | Out-Null
+foreach ($Asset in @('NInferEZ-Engine.png', 'NInferEZ-Engine.ico')) {
+    Copy-Item -LiteralPath (Join-Path $RepoRoot "assets\$Asset") -Destination $AssetRoot
+}
+foreach ($Product in $Products) {
+    & (Join-Path $RepoRoot 'scripts\set-engine-icon.ps1') `
+        -Executable (Join-Path $ProductRoot $Product.Destination)
+}
 $Identity = (& $Serve --version-json | Out-String | ConvertFrom-Json)
 if ($LASTEXITCODE -ne 0) { throw 'ninfer-serve --version-json failed in the package directory.' }
 $Target = switch ($Arch) {
@@ -197,8 +206,8 @@ $Target = switch ($Arch) {
     }
     '120a' {
         @{
-            Family = 'NVIDIA Blackwell GPUs with compute capability 12.0a'
-            Models = @('NVIDIA GeForce RTX 5090', 'NVIDIA RTX PRO 6000 Blackwell')
+            Family = 'NVIDIA Blackwell GPUs with compute capability 12.0 (sm120a build)'
+            Models = @('NVIDIA GeForce RTX 5090', 'NVIDIA GeForce RTX 5080', 'NVIDIA RTX PRO 6000 Blackwell')
             NativeNvfp4 = $true
         }
     }

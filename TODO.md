@@ -846,10 +846,8 @@ where free VRAM also changes the automatic sizing.
   page is live on master, README and `docs/cli.md` link to it, and **it still undercounts any
   speculative configuration by roughly 170 MiB.** Until then, treat its speculative rows as
   optimistic.
-- **A second agent works in this checkout.** On 2026-09-09 a *locked* worktree at
-  `.claude/worktrees/moonlit-scribbling-sundae` was on `sync/neroued-catchup-20260908` with build
-  logs minutes old. **Run `git worktree list` before assuming a branch is free**, `git fetch`
-  before pushing, and do not delete a worktree you did not create even when it is holding 46 GB.
+- **Coordinate shared checkouts.** Run `git worktree list` before assuming a branch is free,
+  run `git fetch` before pushing, and do not delete a worktree you did not create.
 - **Do not merge a stack of dependent PRs in one pass.** Seven were opened stacked, each based on
   the one below; merging them bottom-up with `--delete-branch` deleted each base out from under
   the PR above it, and GitHub *closed* three rather than retargeting them. Only the first reached

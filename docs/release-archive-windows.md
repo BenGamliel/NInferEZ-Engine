@@ -1,5 +1,7 @@
 # NInferEZ Engine for Windows
 
+<p><img src="Assets/NInferEZ-Engine.png" alt="NInferEZ Engine" width="96"></p>
+
 This archive is an unofficial Windows distribution of NInfer based on `iamwavecut/ninfer-all`.
 It is not affiliated with or endorsed by the upstream maintainers. See `UPSTREAM.md`,
 `LICENSING.md`, `THIRD-PARTY-NOTICES.txt` and `licenses/` for source lineage and legal notices.
@@ -13,7 +15,7 @@ target and release status.
 | --- | --- | --- | --- |
 | `sm86` | NVIDIA compute capability 8.6 | GeForce RTX 3090 / 3090 Ti | Preview |
 | `sm89` | NVIDIA compute capability 8.9 | GeForce RTX 4090 | Preview |
-| `sm120a` | NVIDIA compute capability 12.0a | GeForce RTX 5090 and RTX PRO 6000 Blackwell | Preview or Stable as declared in the manifest |
+| `sm120a` | NVIDIA compute capability 12.0 | GeForce RTX 5090, RTX 5080 and RTX PRO 6000 Blackwell | Qualification as declared in the manifest |
 
 An unlisted GPU may use the package for its compute capability; the engine calibrates an unknown
 device profile on first use. Model size, context and concurrency still have to fit its available
